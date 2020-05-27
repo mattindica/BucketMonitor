@@ -9,12 +9,12 @@
             string key,
             FileInfo file,
             DateTime lastModified,
-            bool processed)
+            ImageStatus status)
         {
             this.Key = key;
             this.File = file;
             this.LastModified = lastModified;
-            this.Processed = processed;
+            this.Status = status;
         }
 
         public string Key { get; }
@@ -23,6 +23,11 @@
 
         public DateTime LastModified { get; }
 
-        public bool Processed { get; }
+        public ImageStatus Status { get; private set; }
+
+        public void MarkCompleted()
+        {
+            this.Status = ImageStatus.Completed;
+        }
     }
 }
