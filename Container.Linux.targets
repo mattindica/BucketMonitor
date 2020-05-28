@@ -1,0 +1,22 @@
+<Project>
+  <Target Name="InitContainerProps_linux">
+    <CreateProperty
+        Value="$(LinuxContainerTag)">
+      <Output
+          TaskParameter="Value"
+          PropertyName="BaseContainerTag"/>
+    </CreateProperty>
+    <CreateProperty
+        Value="$(LinuxContainerBase)">
+      <Output
+          TaskParameter="Value"
+          PropertyName="BaseContainerId"/>
+    </CreateProperty>
+    <CreateProperty
+        Value="$(LinuxMicroserviceContainerfilePath)">
+      <Output
+          TaskParameter="Value"
+          PropertyName="MicroserviceContainerfilePath"/>
+    </CreateProperty>
+  </Target>
+</Project>

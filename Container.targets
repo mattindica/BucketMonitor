@@ -1,0 +1,108 @@
+<Project>
+  <Import Project="$(MSBuildThisFileDirectory)Container.Linux.targets" />
+  <Target Name="GetDockerServerOs" Condition="'$(DockerServerOs)' == ''">
+    <Exec
+        Command="docker version --format {{.Server.Os}}"
+        LogStandardErrorAsError="true"
+        ConsoleToMSBuild="true"
+        ContinueOnError="true">
+
+      <Output
+          PropertyName="DockerServerOs"
+          TaskParameter="ConsoleOutput" />
+    </Exec>
+  </Target>
+  <Target Name="GenerateContainerTag">
+    <Exec
+        Command="git describe --dirty --always"
+        LogStandardErrorAsError="true"
+        ConsoleToMSBuild="true"
+        ContinueOnError="false"
+        Condition="$(ContainerTag)==''">
+
+      <Output
+          PropertyName="ContainerTag"
+          TaskParameter="ConsoleOutput" />
+    </Exec>
+  </Target>
+  <Target
+      Name="GenerateContainerName"
+      Condition="'$(ContainerName)' == ''">
+    <CreateProperty
+        Value="$(AssemblyName.ToLower().Replace('.', ''))">
+      <Output
+          TaskParameter="Value"
+          PropertyName="ContainerName"/>
+    </CreateProperty>
+  </Target>
+  <Target
+      Name="GenerateCompleteContainerUri"
+      Condition="$(CompleteContainerUri) == ''">
+    <PropertyGroup>
+      <BaseTag Condition="'$(IncludeBaseTagInContainerId)' == 'false'"></BaseTag>
+      <BaseTag Condition="'$(IncludeBaseTagInContainerId)' == 'true'">$(BaseContainerTag)/</BaseTag>
+    </PropertyGroup>
+    <CreateProperty
+        Value="$(ContainerRegistry)$(DockerServerOs.ToLower())/$(BaseTag)$(ContainerName):$(ContainerTag)">
+      <Output
+          TaskParameter="Value"
+          PropertyName="CompleteContainerUri"/>
+    </CreateProperty>
+  </Target>
+  <Target
+      Name="CreateContainer"
+      AfterTargets="Publish"
+      DependsOnTargets="GetDockerServerOs;GenerateContainerTag;GenerateContainerName;$(CreateContainerDependsOn)"
+      Condition="'$(OutputType)' == 'Exe'
+                AND '$(Containerize)' == true
+                AND '$(CanContainerize)' != false" >
+    <Error
+      Condition="$(DockerServerOs.ToLower()) != linux"
+      Text="Detected docker running in: $(DockerServerOs)
+Only linux containers are implemented at this time." />
+    <Message Importance="high"
+             Text="Docker for $(DockerServerOs.ToLower())"
+             Condition="$(DockerServerOs) != ''" />
+    <CallTarget Targets="InitContainerProps_$(DockerServerOs.ToLower())" />
+
+    <CallTarget Targets="ContainerBuild_Exec" />
+    <CallTarget
+        Targets="PushContainer"
+        Condition="'$(PushContainer)' == 'true'" />
+  </Target>
+
+  <Target
+      Name="ContainerBuild_Exec"
+      DependsOnTargets="GenerateCompleteContainerUri;GenerateContainerBuildCommand">
+    <Exec
+        StandardOutputImportance="high"
+        StandardErrorImportance="high"
+        LogStandardErrorAsError="true"
+        ContinueOnError="false"
+        Command="$(ContainerBuildCommand)" />
+  </Target>
+
+  <Target
+      Name="GenerateContainerBuildCommand"
+      Condition="$(ContainerBuildCommand) == ''">
+
+    <CreateProperty
+        Value="docker build --pull -f $(MicroserviceContainerfilePath) -t $(CompleteContainerUri) --build-arg base_image=$(BaseContainerId):$(BaseContainerTag) $(PublishDir)">
+      <Output
+          TaskParameter="Value"
+          PropertyName="ContainerBuildCommand"/>
+    </CreateProperty>
+    <Message Importance="high"
+             Text="Attempting docker with: $(ContainerBuildCommand)"
+             Condition="$(DockerServerOs) != ''" />
+  </Target>
+
+  <Target Name="PushContainer">
+    <Exec
+        StandardOutputImportance="high"
+        StandardErrorImportance="high"
+        LogStandardErrorAsError="true"
+        ContinueOnError="false"
+        Command="$(ContainerPushCommand) $(CompleteContainerUri)" />
+  </Target>
+</Project>
