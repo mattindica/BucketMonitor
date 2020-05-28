@@ -10,22 +10,7 @@
 
         public bool TryGet(string key, DateTime lastModified, out SourceImage image)
         {
-            if (this.Cache.TryGetValue(key, out image))
-            {
-                if (image.LastModified == lastModified)
-                {
-                    return true;
-                }
-                else
-                {
-                    Console.WriteLine("Key is outdated: {key}", key);
-                    return false;
-                }
-            }
-            else
-            {
-                return false;
-            }
+            return this.Cache.TryGetValue(key, out image);
         }
 
         public void Put(SourceImage image)
