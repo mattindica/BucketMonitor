@@ -248,26 +248,38 @@
                 file.Directory.Create();
             }
 
-            var response = await this.Client.GetObjectAsync(new GetObjectRequest()
+            try
             {
-                BucketName = this.BucketName,
-                Key = image.Key
-            });
+                var response = await this.Client.GetObjectAsync(new GetObjectRequest()
+                {
+                    BucketName = this.BucketName,
+                    Key = image.Key
+                });
 
-            var tmp = Path.GetTempFileName();
+                var tmp = Path.GetTempFileName();
 
-            await response.WriteResponseStreamToFileAsync(tmp, false, CancellationToken.None);
+                await response.WriteResponseStreamToFileAsync(tmp, false, CancellationToken.None);
 
-            File.Move(tmp, file.FullName, overwrite: true);
+                File.Move(tmp, file.FullName, overwrite: true);
 
-            await this.UpdateImageStatusAsync(image.Key, true);
+                await this.UpdateImageStatusAsync(image.Key, true);
 
-            Console.WriteLine("\rDownload Complete: {0} -> {1}", image.Key, file.FullName);
+                Console.WriteLine("\rDownload Complete: {0} -> {1}", image.Key, file.FullName);
 
-            image.MarkCompleted();
-            this.Cache.Put(image);
+                image.MarkCompleted();
+                this.Cache.Put(image);
 
-            return file;
+                return file;
+            }
+            catch
+            {
+                Console.WriteLine("\rDownload Failed:  {0} -> {1}", image.Key, file.FullName);
+
+                image.MarkFailed();
+                this.Cache.Put(image);
+
+                return null;
+            }
         }
     }
 }

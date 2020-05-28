@@ -29,5 +29,10 @@
         {
             this.Status = ImageStatus.Completed;
         }
+
+        public void MarkFailed()
+        {
+            this.Status = ImageStatus.Failed;
+        }
     }
 }
