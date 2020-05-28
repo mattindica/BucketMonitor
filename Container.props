@@ -1,0 +1,34 @@
+<Project>
+  <PropertyGroup Label="GeneralContainerProps">
+    <ContainerName Condition="'$(ContainerName)' == ''">$(AssemblyName.ToLower().Replace('.', ''))</ContainerName>
+    <ContainerRegistry>indicalabs/</ContainerRegistry>
+    <IncludeBaseTagInContainerId>false</IncludeBaseTagInContainerId>
+
+    <!--Populated by the GenerateContainerTag target -->
+    <ContainerTag></ContainerTag>
+    <DockerServerOs>
+      <!--populated by the GetDockerServerOs target-->
+    </DockerServerOs>
+    <CompleteContainerUri>
+      <!--Populated by the GenerateCompleteContainerUri target-->
+    </CompleteContainerUri>
+    <ContainerBuildCommand>
+      <!--Populated by the GenerateContainerBuildCommand target-->
+    </ContainerBuildCommand>
+
+    <ContainerPushCommand>docker push</ContainerPushCommand>
+
+    <!--The following props are initialized by the InitContainerProps_{Docker.Server.Os} target-->
+    <BaseContainerTag></BaseContainerTag>
+    <BaseContainerId></BaseContainerId>
+    <MicroserviceContainerfilePath></MicroserviceContainerfilePath>
+  </PropertyGroup>
+
+  <PropertyGroup Label="DockerForLinuxDefaultProps">
+    <!--These are defined this way so that consuming .csproj can override as necessary-->
+    <LinuxContainerTag Condition="$(LinuxContainerTag) == ''">3</LinuxContainerTag>
+    <LinuxContainerBase Condition="$(LinuxContainerBase) == ''">alpine</LinuxContainerBase>
+    <LinuxMicroserviceContainerfilePath Condition="$(LinuxMicroserviceContainerfilePath) == ''">$(MSBuildThisFileDirectory)Linux.Dockerfile</LinuxMicroserviceContainerfilePath>
+  </PropertyGroup>
+
+</Project>
