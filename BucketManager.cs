@@ -51,7 +51,7 @@
         {
             SourceImage image;
 
-            if (this.TryConvertPath(key, out var file))
+            if (!key.EndsWith("\\") && this.TryConvertPath(key, out var file))
             {
                 var tags = await this.ListTagsAsync(key);
                 ImageStatus status;
@@ -243,10 +243,13 @@
             SourceImage image)
         {
             var file = image.File;
+
+
             if (!file.Directory.Exists)
             {
                 file.Directory.Create();
             }
+            
 
             try
             {
