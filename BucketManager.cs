@@ -51,7 +51,7 @@
         {
             SourceImage image;
 
-            if (!key.EndsWith("\\") && this.TryConvertPath(key, out var file))
+            if (!key.EndsWith("/") && this.TryConvertPath(key, out var file))
             {
                 var tags = await this.ListTagsAsync(key);
                 ImageStatus status;
@@ -244,12 +244,14 @@
         {
             var file = image.File;
 
-
-            if (!file.Directory.Exists)
+            if (!file.Exists)
             {
-                file.Directory.Create();
+                Console.WriteLine("Skipping Download. File doesn't exist: {0}", file.FullName);
+
+                image.MarkFailed();
+                this.Cache.Put(image);
+                return null;
             }
-            
 
             try
             {
@@ -263,7 +265,7 @@
 
                 await response.WriteResponseStreamToFileAsync(tmp, false, CancellationToken.None);
 
-                File.Move(tmp, file.FullName, overwrite: true);
+                this.SafeMove(tmp, file.FullName);
 
                 await this.UpdateImageStatusAsync(image.Key, true);
 
@@ -282,6 +284,37 @@
                 this.Cache.Put(image);
 
                 return null;
+            }
+        }
+
+        private void SafeMove(string source, string destination)
+        {
+            try
+            {
+                var sourceFile = new FileInfo(source); 
+                var destinationFile = new FileInfo(destination); 
+
+                if (sourceFile.Length == destinationFile.Length)
+                {
+                    File.Move(source, destination, overwrite: true);
+                }
+                else
+                {
+                    Console.WriteLine(
+                        "Cancelling Move Operation. Source file length ({0}) does not match destination ({1}): {2}",
+                        sourceFile.Length,
+                        destinationFile.Length,
+                        destination);
+
+                    File.Delete(source);
+                }
+            }
+            catch
+            {
+                if (File.Exists(source))
+                {
+                    File.Delete(source);
+                }
             }
         }
     }
