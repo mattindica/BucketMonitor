@@ -54,7 +54,7 @@
             {
                 var tokens = line.Split('\t');
 
-                if (tokens.Count() == 3 &&
+                if (tokens.Count() == 4 &&
                     BucketManager.TryConvertPath(tokens[0], driveLetter, out var file) &&
                     DateTime.TryParse(tokens[1], out var lastModified) &&
                     long.TryParse(tokens[2], out var totalBytes) &&

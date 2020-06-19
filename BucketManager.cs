@@ -395,7 +395,7 @@
                     if (!this.SafeMove(tmp, file.FullName))
                     {
                         image.MarkFailed();
-                        this.Cache.Put(image, skipEnqueue: true);
+                        this.Cache.Put(image);//, skipEnqueue: true);
                         tracker.Fail();
                         return null;
                     }
