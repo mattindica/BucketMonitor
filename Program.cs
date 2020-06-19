@@ -1,139 +1,105 @@
 ﻿namespace BucketMonitor
 {
     using System;
-    using System.ComponentModel.DataAnnotations;
-    using System.Linq;
+    using System.IO;
+    using System.Reflection;
+    using System.Runtime.CompilerServices;
+    using System.Threading.Tasks;
 
-    using Amazon;
-    using Amazon.Runtime;
+    using Microsoft.Extensions.DependencyInjection;
+    using Microsoft.Extensions.Logging;
 
-    using McMaster.Extensions.CommandLineUtils;
+    using Serilog;
 
     public class Program
     {
-        public static int Main(string[] args)
+        public static string BaseDirectory => ".";
+
+        public static string OutputDirectory => Path.Combine(BaseDirectory, "output");
+
+        public static string LoggingDirectory => Path.Combine(OutputDirectory, "logs");
+
+        public static string CacheFile => Path.Combine(OutputDirectory, "cache");
+
+        public static string ConfigFile => Path.Combine(BaseDirectory, "config.yml");
+
+        private static void SetupOutputDirectory()
         {
-            var app = new CommandLineApplication();
-
-            app.HelpOption();
-
-            var bucketName = app.Argument<string>(
-                name: "BUCKET_NAME",
-                description: "The Amazon S3 Bucket",
-                configuration: argument =>
-                {
-                    argument.OnValidate(
-                        ctx =>
-                        {
-                            if (argument.Value == null)
-                            {
-                                throw new ArgumentException($"no <BUCKET_NAME> was provided.");
-                            }
-                            return ValidationResult.Success;
-                        });
-                });
-
-            var regionEndpoint = app.Argument<string>(
-                name: "REGION_ENDPOINT",
-                description: "The Amazon S3 Region Endpoint",
-                configuration: argument =>
-                {
-                    argument.OnValidate(
-                        ctx =>
-                        {
-                            if (argument.Value == null)
-                            {
-                                throw new ArgumentException($"no <REGION_ENDPOINT> was provided.");
-                            }
-                            else if (!RegionEndpoint.EnumerableAllRegions.Any(x => x.SystemName == argument.Value))
-                            {
-                                throw new ArgumentException($"Invalid <REGION_ENDPOINT>: {argument.Value}");
-                            }
-
-                            return ValidationResult.Success;
-                        });
-                });
-
-            var driveLetter = app.Argument<char>(
-                name: "DRIVE_LETTER",
-                description: "The storage gateway drive letter",
-                configuration: argument =>
-                {
-                    argument.OnValidate(
-                        ctx =>
-                        {
-                            if (argument.Value == null)
-                            {
-                                throw new ArgumentException($"no <DRIVE_LETTER> was provided.");
-                            }
-                            else if (argument.Value.Length != 1)
-                            {
-                                throw new ArgumentException($"Invalid Drive Letter: {argument.Value}");
-                            }
-
-                            return ValidationResult.Success;
-                        });
-                });
-
-            var command = app.Argument<string>(
-                name: "COMMAND",
-                description: "list | monitor",
-                configuration: argument =>
-                {
-                    argument.OnValidate(
-                        ctx =>
-                        {
-                            if (argument.Value == null)
-                            {
-                                throw new ArgumentException($"no <COMMAND> was provided.");
-                            }
-
-                            return ValidationResult.Success;
-                        });
-                });
-
-
-            app.OnValidate(
-                ctx =>
-                {
-                    if (app.Arguments.Count < 4 || app.RemainingArguments.Count > 0)
-                    {
-                        throw new ArgumentException("Incorrect number of arguments.");
-                    }
-                    else
-                    {
-                        return ValidationResult.Success;
-                    }
-                });
-
-
-            app.OnExecuteAsync(async (cancellationToken) =>
+            if (!Directory.Exists(OutputDirectory))
             {
-                var endpoint = RegionEndpoint.GetBySystemName(regionEndpoint.ParsedValue);
+                Directory.CreateDirectory(OutputDirectory);
+            }
 
-                BucketManager manager = new BucketManager(
-                    bucketName: bucketName.ParsedValue,
-                    driveLetter: driveLetter.ParsedValue,
-                    pollingInterval: TimeSpan.FromSeconds(30),
-                    region: endpoint,
-                    credentials: new InstanceProfileAWSCredentials());
+            if (!Directory.Exists(LoggingDirectory))
+            {
+                Directory.CreateDirectory(LoggingDirectory);
+            }
+        }
 
-                switch (command.ParsedValue) {
-                    case "list":
-                        await manager.DisplayImages();
-                        break;
-                    case "monitor":
-                        await manager.MonitorAsync();
-                        break;
-                    default:
-                        Console.WriteLine("Invalid Command: {0}", args[0]);
-                        break;
+        private static void ConfigureServices(ServiceCollection services)
+        {
+            SetupOutputDirectory();
+
+            var timestamp = DateTime.Now.ToString("yyyyMMddTHHmmss");
+            var serilogLogger = new LoggerConfiguration()
+                .MinimumLevel.Debug()
+                .WriteTo.File(Path.Combine(LoggingDirectory, $"{timestamp}.log"))
+                .CreateLogger();
+
+            services.AddLogging(builder =>
+            {
+                builder.SetMinimumLevel(LogLevel.Information)
+                    .AddSerilog(logger: serilogLogger, dispose: true)
+                    .AddConsole(cfg => cfg.LogToStandardErrorThreshold = LogLevel.Information);
+            });
+        }
+
+
+        public static async Task Main(string[] args)
+        {
+            var services = new ServiceCollection();
+            ConfigureServices(services);
+
+            using (ServiceProvider serviceProvider = services.BuildServiceProvider())
+            {
+                if (args.Length < 1)
+                {
+                    Console.WriteLine("Usage: dotnet run -- [monitor|list|status|completed]");
+                    return;
                 }
 
-                return 0;
-            });
+                var logger = serviceProvider.GetService<ILogger<Program>>();
 
-            return app.Execute(args);
+                if (Settings.TryLoad(ConfigFile, out var settings, logger))
+                {
+                    logger.LogInformation("Loaded Configuration {0}:\n{1}", new FileInfo(ConfigFile).FullName, settings.Summarize());
+                    // Customize AWS info here
+
+                    BucketManager manager = new BucketManager(
+                        logger: logger,
+                        settings: settings);
+
+                    switch (args[0]) {
+                        case "completed":
+                            await manager.DisplayCompleted();
+                            break;
+                        case "list":
+                            await manager.DisplayImages();
+                            break;
+                        case "status":
+                            await manager.Summarize();
+                            break;
+                        case "monitor":
+                            await manager.MonitorAsync();
+                            break;
+                        default:
+                            Console.WriteLine("Invalid Command: {0}", args[0]);
+                            break;
+                    }
+                }
+            }
+
+
         }
     }
 }

@@ -12,22 +12,25 @@
     using Amazon.S3.Model;
 
     using ConsoleTables;
+    using Microsoft.Extensions.Logging;
 
     public class BucketManager
     {
         private static readonly string TAG_NAME_PROCESSED = "processed";
-
         public BucketManager(
-            string bucketName,
-            char driveLetter,
-            TimeSpan pollingInterval,
-            Amazon.RegionEndpoint region,
-            AWSCredentials credentials)
+            ILogger logger,
+            Settings settings)
         {
-            this.Client = new AmazonS3Client(credentials, region);
-            this.BucketName = bucketName;
-            this.DriveLetter = driveLetter;
-            this.PollingInterval = pollingInterval;
+            this.Client = new AmazonS3Client(
+                credentials: settings.GetCredentials(), 
+                region: settings.RegionEndpoint);
+
+            this.BucketName = settings.BucketName;
+            this.DriveLetter = settings.DriveLetter;
+            this.PollingInterval = settings.PollingInterval;
+            this.Cache = new S3ObjectCache(logger, settings.DriveLetter);
+            this.DebugMode = settings.DebugMode;
+            this.Logger = logger;
         }
 
         public TimeSpan PollingInterval { get; }
@@ -38,7 +41,11 @@
 
         private AmazonS3Client Client { get; }
 
-        private S3ObjectCache Cache { get; } = new S3ObjectCache();
+        private S3ObjectCache Cache { get; } 
+
+        private bool DebugMode { get; } 
+
+        private ILogger Logger { get; }
 
         public async Task<IEnumerable<SourceImage>> ListPendingAsync()
         {
@@ -47,13 +54,13 @@
                 .OrderBy(obj => obj.LastModified);
         }
 
-        private async Task<SourceImage> LoadSourceImageAsync(string key, DateTime lastModified)
+        private SourceImage LoadSourceImage(string key, DateTime lastModified, long totalBytes)
         {
             SourceImage image;
 
-            if (!key.EndsWith("/") && this.TryConvertPath(key, out var file))
+            if (this.TryConvertPath(key, out var file))
             {
-                var tags = await this.ListTagsAsync(key);
+                /*var tags = await this.ListTagsAsync(key);
                 ImageStatus status;
 
                 if (tags.TryGetValue(TAG_NAME_PROCESSED, out var value) && value == true.ToString())
@@ -63,13 +70,14 @@
                 else
                 {
                     status = ImageStatus.Pending;
-                }
+                }*/
 
                 image = new SourceImage(
                     key: key,
                     file: file,
                     lastModified: lastModified,
-                    status: status);
+                    totalBytes: totalBytes,
+                    status: ImageStatus.Pending);
 
             }
             else
@@ -78,6 +86,7 @@
                     key: key,
                     file: null,
                     lastModified: lastModified,
+                    totalBytes: totalBytes,
                     status: ImageStatus.Skipped);
             }
 
@@ -89,23 +98,36 @@
         {
             DateTime? lastCheck = null;
 
-            Console.WriteLine("Monitoring Bucket {0}\n\n", this.BucketName);
+            this.Logger.LogInformation("Monitoring Bucket {0}", this.BucketName);
+            Console.Out.Flush();
             for (; ; ) {
                 try
                 {
                     var now = DateTime.Now;
                     if (!lastCheck.HasValue || DateTime.Now.Subtract(lastCheck.Value) > this.PollingInterval)
                     {
+                        Console.WriteLine();
+                        Console.WriteLine();
+                        Console.Out.Flush();
+                        this.Logger.LogInformation("Scanning Bucket {0}", this.BucketName);
+                        Console.Out.Flush();
                         lastCheck = DateTime.Now;
 
                         var pending = await this.ListPendingAsync();
                         var count = pending.Count();
+                        var tracker = new DownloadTracker(count, pending.Select(x => x.TotalBytes).Sum());
 
                         if (count > 0)
                         {
-                            Console.WriteLine("Downloading {0} Pending Images", pending.Count());
-                            var tasks = pending.Select(image => this.DownloadAsync(image));
+                            this.Logger.LogInformation("Downloading {0} Pending Images", pending.Count());
+                            var tasks = pending.Select(image => this.DownloadAsync(image, tracker));
                             await Task.WhenAll(tasks);
+                            this.Logger.LogInformation("Downloads Complete");
+                            await this.Cache.SaveAsync();
+                        }
+                        else
+                        {
+                            this.Logger.LogInformation("No Pending Images");
                         }
                     }
                     else
@@ -115,9 +137,72 @@
                 }
                 catch (Exception e)
                 {
-                    Console.WriteLine("Exception: {0}", e);
+                    this.Logger.LogError("Exception: {0}", e.ToString());
                 }
             }
+        }
+
+        public async Task Summarize()
+        {
+            var table = new ConsoleTable("Status", "Total Count");
+            table.Options.EnableCount = false;
+
+            var images = (await this.ListImagesAsync())
+                .OrderBy(x => x.Status)
+                .ThenBy(x => x.LastModified)
+                .GroupBy(x => x.Status)
+                .ToDictionary(x => x.Key, x => x.ToList());
+
+
+            table.AddRow(this.ToName(ImageStatus.Completed), (images.GetValueOrDefault(ImageStatus.Completed)?.Count ?? 0).ToString());
+            table.AddRow(this.ToName(ImageStatus.Pending), (images.GetValueOrDefault(ImageStatus.Pending)?.Count ?? 0).ToString());
+            table.AddRow(this.ToName(ImageStatus.Failed), (images.GetValueOrDefault(ImageStatus.Failed)?.Count ?? 0).ToString());
+            table.AddRow(this.ToName(ImageStatus.Skipped), (images.GetValueOrDefault(ImageStatus.Skipped)?.Count ?? 0).ToString());
+
+            table.Write();
+        }
+
+        private string ToName(ImageStatus status) => Enum.GetName(typeof(ImageStatus), status);
+
+        public async Task DisplayCompleted()
+        {
+            var table = new ConsoleTable("Key", "Last Modified", "Completed", "Status", "Path");
+            table.Options.EnableCount = false;
+
+            var images = (await this.ListImagesAsync())
+                .OrderBy(x => x.Status)
+                .ThenBy(x => x.LastModified);
+
+            var tasks = images.Select(x => this.IsProcessed(x.Key));
+            this.Logger.LogInformation("Looking up processing status for {0} files", images.Count());
+
+            /*foreach (var (image, task) in Enumerable.Zip(images, tasks))
+            {
+                var result = await task;
+                this.Logger.LogInformation("{0} - {1}", image.Key, result);
+            }*/
+
+            var statuses = await Task.WhenAll(tasks);
+
+            foreach (var (image, completed) in Enumerable.Zip(images, statuses))
+            {
+                if (completed)
+                {
+                    this.Logger.LogInformation("Detected Processed Object: {0}", image.Key);
+                    image.MarkCompleted();
+                    this.Cache.Put(image);
+                }
+                table.AddRow(
+                    image.Key,
+                    image.LastModified,
+                    completed,
+                    Enum.GetName(typeof(ImageStatus), image.Status),
+                    image.File?.FullName ?? "-"); 
+            }
+
+            table.Write();
+            Console.WriteLine();
+            await this.Cache.SaveAsync();
         }
 
         public async Task DisplayImages()
@@ -128,6 +213,8 @@
             var images = (await this.ListImagesAsync())
                 .OrderBy(x => x.Status)
                 .ThenBy(x => x.LastModified);
+
+            this.Logger.LogInformation("Showing {0} objects...", images.Count());
 
             foreach (var image in images)
             {
@@ -142,7 +229,7 @@
             Console.WriteLine();
         }
 
-        private async Task<SourceImage> LoadObjectAsync(S3Object obj)
+        private SourceImage LoadObject(S3Object obj)
         {
             if (this.Cache.TryGet(obj.Key, obj.LastModified, out var cached))
             {
@@ -150,16 +237,7 @@
             }
             else
             {
-                var image = await this.LoadSourceImageAsync(obj.Key, obj.LastModified);
-                if (image != null)
-                {
-                    this.Cache.Put(image);
-                    return image;
-                }
-                else
-                {
-                    return null;
-                }
+                return this.LoadSourceImage(obj.Key, obj.LastModified, obj.Size);
             }
         } 
 
@@ -171,24 +249,45 @@
                 BucketName = this.BucketName
             };
 
+            var console = new ConsoleString();
+
             int count = 0;
             ListObjectsV2Response response;
             do
             {
-                Console.Write("\rQuerying Objects {0}", new string('.', count));
+                console.Update($"Querying {results.Count()} Objects...");
                 response = await this.Client.ListObjectsV2Async(request);
 
-                var tasks = response.S3Objects.Select(obj => this.LoadObjectAsync(obj));
-                var images = await Task.WhenAll(tasks);
+                var images = response.S3Objects.Select(obj => this.LoadObject(obj));
                 results.AddRange(images);
                 request.ContinuationToken = response.NextContinuationToken;
                 count++;
+
             }
             while (response.IsTruncated);
 
+            console.Update("");
             Console.WriteLine();
+            this.Logger.LogInformation($"Queried {results.Count()} Objects");
+
+            await this.Cache.SaveAsync();
+            Console.Out.Flush();
 
             return results;
+        }
+
+        private async Task<bool> IsProcessed(string key)
+        {
+            try
+            {
+                var tags = await this.ListTagsAsync(key);
+                return tags.ContainsKey(TAG_NAME_PROCESSED);
+            }
+            catch (Exception ec)
+            {
+                this.Logger.LogError("Error checking processing status for {0}: {1}", key, ec);
+                return false;
+            }
         }
 
         private async Task<IDictionary<string, string>> ListTagsAsync(string key)
@@ -202,7 +301,7 @@
             return response.Tagging.ToDictionary(x => x.Key, x => x.Value);
         }
 
-        public async Task UpdateImageStatusAsync(
+        /*public async Task UpdateImageStatusAsync(
           string key,
           bool processed)
         {
@@ -222,36 +321,44 @@
                     }
                 }
             });
+        }*/
+
+        public bool TryConvertPath(string key, out FileInfo file)
+        {
+            return TryConvertPath(key, this.DriveLetter, out file);
         }
 
-        private bool TryConvertPath(string key, out FileInfo file)
+        public static bool TryConvertPath(string key, char driveLetter, out FileInfo file)
         {
-            if (Path.IsPathRooted(key))
+            if (key.EndsWith("/") || Path.IsPathRooted(key))
             {
                 file = default(FileInfo);
                 return false;
             }
             else
             {
-                var path = Path.Combine($"{this.DriveLetter}:\\", key);
+                var path = Path.Combine($"{driveLetter}:\\", key);
                 file = new FileInfo(path); 
                 return true;
             }
         }
 
         public async Task<FileInfo> DownloadAsync(
-            SourceImage image)
+            SourceImage image,
+            DownloadTracker tracker)
         {
             var file = image.File;
 
-            if (!file.Exists)
+            /*if (!file.Exists)
             {
                 Console.WriteLine("Skipping Download. File doesn't exist: {0}", file.FullName);
 
                 image.MarkFailed();
                 this.Cache.Put(image);
                 return null;
-            }
+            }*/
+            var started = false;
+            long downloaded = 0;
 
             try
             {
@@ -263,31 +370,69 @@
 
                 var tmp = Path.GetTempFileName();
 
+                long transferred = 0;
+                response.WriteObjectProgressEvent += (sender, p) =>
+                {
+                    if (!started)
+                    {
+                        tracker.Start();
+                    }
+                    started = true;
+
+                    downloaded = p.TransferredBytes;
+                    tracker.Downloaded(downloaded - transferred);
+                    transferred = downloaded;
+                };
+
                 await response.WriteResponseStreamToFileAsync(tmp, false, CancellationToken.None);
 
-                this.SafeMove(tmp, file.FullName);
+                if (this.DebugMode)
+                {
+                    File.Delete(tmp);
+                }
+                else
+                {
+                    if (!this.SafeMove(tmp, file.FullName))
+                    {
+                        image.MarkFailed();
+                        this.Cache.Put(image, skipEnqueue: true);
+                        tracker.Fail();
+                        return null;
+                    }
+                }
 
-                await this.UpdateImageStatusAsync(image.Key, true);
+                // await this.UpdateImageStatusAsync(image.Key, true);
 
-                Console.WriteLine("\rDownload Complete: {0} -> {1}", image.Key, file.FullName);
+                this.Logger.LogDebug("Download Complete: {0} -> {1}", image.Key, file.FullName);
 
                 image.MarkCompleted();
                 this.Cache.Put(image);
+                if (started)
+                {
+                    tracker.Complete();
+                }
 
                 return file;
             }
-            catch
+            catch (Exception ec)
             {
-                Console.WriteLine("\rDownload Failed:  {0} -> {1}", image.Key, file.FullName);
+                this.Logger.LogDebug("Download Failed:  {0} -> {1}", image.Key, file.FullName);
+                this.Logger.LogDebug("Exception: {0}", ec.ToString());
 
                 image.MarkFailed();
                 this.Cache.Put(image);
+
+                if (started)
+                {
+                    tracker.Fail();
+                    tracker.Downloaded(image.TotalBytes - downloaded);
+                }
 
                 return null;
             }
         }
 
-        private void SafeMove(string source, string destination)
+        private bool SafeMove(string source, string destination)
         {
             try
             {
@@ -300,7 +445,7 @@
                 }
                 else
                 {
-                    Console.WriteLine(
+                    this.Logger.LogDebug(
                         "Cancelling Move Operation. Source file length ({0}) does not match destination ({1}): {2}",
                         sourceFile.Length,
                         destinationFile.Length,
@@ -308,13 +453,18 @@
 
                     File.Delete(source);
                 }
+
+                return true;
             }
-            catch
+            catch (Exception ec)
             {
+                this.Logger.LogDebug("Exception Moving File {0} -> {1}: {2}", source, destination, ec.ToString());
                 if (File.Exists(source))
                 {
                     File.Delete(source);
                 }
+
+                return false;
             }
         }
     }

@@ -9,11 +9,13 @@
             string key,
             FileInfo file,
             DateTime lastModified,
+            long totalBytes,
             ImageStatus status)
         {
             this.Key = key;
             this.File = file;
             this.LastModified = lastModified;
+            this.TotalBytes = totalBytes;
             this.Status = status;
         }
 
@@ -22,6 +24,8 @@
         public FileInfo File { get; }
 
         public DateTime LastModified { get; }
+
+        public long TotalBytes { get; }
 
         public ImageStatus Status { get; private set; }
 
