@@ -40,6 +40,7 @@
             this.DriveLetter = settings.DriveLetter;
             this.PollingInterval = settings.PollingInterval;
             this.DebugMode = settings.DebugMode;
+            this.MaxDownloads = settings.MaxDownloads;
             this.Logger = logger;
         }
 
@@ -51,7 +52,7 @@
 
         private AmazonS3Client Client { get; }
 
-        // private S3ObjectCache Cache { get; } 
+        private int MaxDownloads { get; set; }
 
         private bool DebugMode { get; }
 
@@ -96,37 +97,64 @@
 
             this.Logger.LogInformation("Monitoring Bucket {0}", this.BucketName);
             Console.Out.Flush();
-            for (; ; ) {
+            for (; ; )
+            {
                 try
                 {
                     var now = DateTime.Now;
                     if (!lastCheck.HasValue || DateTime.Now.Subtract(lastCheck.Value) > this.PollingInterval)
                     {
-                        var dbContext = provider.GetService<BucketMonitorContext>();
-                        Console.WriteLine();
-                        Console.WriteLine();
-                        Console.Out.Flush();
-                        this.Logger.LogInformation("Scanning Bucket {0}", this.BucketName);
-                        Console.Out.Flush();
-                        lastCheck = DateTime.Now;
-
-                        var bucket = await this.GetBucketAsync(dbContext);
-                        var pending = await this.ListPendingAsync(bucket, dbContext);
-                        var count = pending.Count();
-                        var tracker = new DownloadTracker(count, pending.Select(x => x.TotalBytes).Sum());
-                        var dbTracker = new DatabaseTracker(dbContext: dbContext);
-
-                        var entryMap = bucket.Images.ToDictionary(x => x.Key);
-                        if (count > 0)
+                        using (var scoped = provider.CreateScope())
                         {
-                            this.Logger.LogInformation("Downloading {0} Pending Images", pending.Count());
-                            var tasks = pending.Select(image => this.DownloadAsync(image, entryMap[image.Key], tracker, dbTracker));
-                            await Task.WhenAll(tasks);
-                            this.Logger.LogInformation("Downloads Complete");
-                        }
-                        else
-                        {
-                            this.Logger.LogInformation("No Pending Images");
+                            var dbContext = scoped.ServiceProvider.GetService<BucketMonitorContext>();
+                            Console.WriteLine();
+                            Console.WriteLine();
+                            Console.Out.Flush();
+                            this.Logger.LogInformation("Scanning Bucket {0}", this.BucketName);
+                            Console.Out.Flush();
+                            lastCheck = DateTime.Now;
+
+                            var bucket = await this.GetBucketAsync(dbContext);
+                            var pending = await this.ListPendingAsync(bucket, dbContext);
+                            var count = pending.Count();
+                            var tracker = new DownloadTracker(count, pending.Select(x => x.TotalBytes).Sum());
+                            var dbTracker = new DatabaseTracker(dbContext: dbContext);
+
+                            bucket = await this.GetBucketAsync(dbContext);
+                            var entryMap = bucket.Images.ToDictionary(x => x.Key);
+                            if (count > 0)
+                            {
+                                this.Logger.LogInformation("Downloading {0} Pending Images", pending.Count());
+                                var throttler = new SemaphoreSlim(initialCount: this.MaxDownloads);
+
+                                var tasks = new List<Task<FileInfo>>();
+                                foreach (var image in pending)
+                                {
+                                    await throttler.WaitAsync();
+                                    tasks.Add(
+                                        Task.Run(async () =>
+                                        {
+                                            try
+                                            {
+                                                return await this.DownloadAsync(
+                                                    image,
+                                                    entryMap[image.Key],
+                                                    tracker,
+                                                    dbTracker);
+                                            }
+                                            finally
+                                            {
+                                                throttler.Release();
+                                            }
+                                        }));
+                                }
+                                await Task.WhenAll(tasks);
+                                this.Logger.LogInformation("Downloads Complete");
+                            }
+                            else
+                            {
+                                this.Logger.LogInformation("No Pending Images");
+                            }
                         }
                     }
                     else
@@ -139,6 +167,12 @@
                     this.Logger.LogError("Exception: {0}", e.ToString());
                 }
             }
+        }
+
+        public async Task ResetAsync(ServiceProvider provider)
+        {
+            var dbContext = provider.GetService<BucketMonitorContext>();
+            await dbContext.Database.ExecuteSqlRawAsync("TRUNCATE TABLE IMAGE");
         }
 
         public async Task Summarize(ServiceProvider provider)
@@ -252,19 +286,21 @@
             }
             else
             {
+                var image = this.CreateSourceImage(
+                    key: obj.Key,
+                    lastModified: obj.LastModified,
+                    totalBytes: obj.Size);
+
                 dbContext.Image.Add(new ImageEntry()
                 {
                     Bucket = tracked,
                     Key = obj.Key,
                     LastModified = obj.LastModified,
                     FileSize = obj.Size,
-                    Status = ImageStatus.Pending
+                    Status = image.Status
                 });
 
-                return this.CreateSourceImage(
-                    key: obj.Key,
-                    lastModified: obj.LastModified,
-                    totalBytes: obj.Size);
+                return image;
             }
         } 
 
@@ -349,15 +385,6 @@
             DatabaseTracker dbTracker)
         {
             var file = image.File;
-
-            /*if (!file.Exists)
-            {
-                Console.WriteLine("Skipping Download. File doesn't exist: {0}", file.FullName);
-
-                image.MarkFailed();
-                this.Cache.Put(image);
-                return null;
-            }*/
             var started = false;
             long downloaded = 0;
 
@@ -402,9 +429,7 @@
                     }
                 }
 
-                // await this.UpdateImageStatusAsync(image.Key, true);
-
-                this.Logger.LogDebug("Download Complete: {0} -> {1}", image.Key, file.FullName);
+                this.Logger.LogDebug("Download Complete: {0} -> {1}", image.Key, file?.FullName ?? "-");
 
                 image.MarkCompleted();
                 dbTracker.Update(entry, ImageStatus.Completed);

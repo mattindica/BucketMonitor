@@ -19,7 +19,8 @@
        typeof(ListCommand),
        typeof(StatusCommand),
        typeof(MonitorCommand),
-       typeof(ConfigureCommand)
+       typeof(ConfigureCommand),
+       typeof(ResetCommand)
         )]
     public class Program 
     {

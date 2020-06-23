@@ -54,7 +54,7 @@
         {
             var all = (completed + failed);
             var remaining = total - (completed + failed);
-            this.message.Update($"Total={BytesToString(this.totalBytes)}, Downloaded={BytesToString(this.downloadedBytes)}, REMAINING_FILES={remaining}, SUCCESS={completed}, Failed={failed}");
+            this.message.Update($"Total={BytesToString(this.totalBytes)}, Downloaded={BytesToString(this.downloadedBytes)}, Processing={running}/{remaining}, SUCCESS={completed}, Failed={failed}");
         }
 
         public void Fail()

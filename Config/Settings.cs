@@ -3,7 +3,7 @@
     using Amazon;
     using Amazon.Runtime;
     using BucketMonitor.Config;
-    using Microsoft.Extensions.Logging;
+
     using System;
     using System.IO;
     using YamlDotNet.Serialization;
@@ -12,6 +12,8 @@
     public class Settings
     {
         public string BucketName { get; set; }
+
+        public int MaxDownloads { get; set; }
 
         public char DriveLetter { get; set; }
 
@@ -43,6 +45,7 @@
         {
             return
                 $"bucket_name = {this.BucketName}\n" +
+                $"max_downloads = {this.MaxDownloads}\n" +
                 $"drive_letter = {this.DriveLetter}\n" +
                 $"polling_interval = {this.PollingInterval}\n" +
                 $"region_endpoint = {this.RegionEndpoint.SystemName}\n" +
@@ -65,7 +68,7 @@
                     return true;
                 }
             }
-            catch (Exception ec)
+            catch
             {
                 settings = null;
                 return false;
