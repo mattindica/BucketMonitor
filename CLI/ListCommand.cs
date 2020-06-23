@@ -1,5 +1,6 @@
 ﻿namespace BucketMonitor.CLI
 {
+    using System.Collections.Generic;
     using System.Linq;
     using System.Threading.Tasks;
 
@@ -19,7 +20,7 @@
         protected override async Task<int> ExecuteAsync(CommandLineApplication app, ServiceProvider provider)
         {
             var manager = this.BuildBucketManager(provider);
-            var statuses = this.Statuses.ToHashSet();
+            var statuses = this.Statuses?.ToHashSet(); 
 
             if (this.CachedOnly)
             {

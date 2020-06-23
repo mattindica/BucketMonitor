@@ -1,16 +1,6 @@
 ﻿namespace BucketMonitor
 {
 
-    /*
-     * TODO:
-     * 
-     * - Ignore Directores (Or Include)
-     * - Show Cached
-     * - Erase Cache
-     * 
-     * 
-     */
-
     using System;
     using System.Collections.Generic;
     using System.IO;
@@ -41,6 +31,7 @@
             this.PollingInterval = settings.PollingInterval;
             this.DebugMode = settings.DebugMode;
             this.MaxDownloads = settings.MaxDownloads;
+            this.ExcludedPaths = settings.ExcludedPaths ?? new List<string>();
             this.Logger = logger;
         }
 
@@ -57,6 +48,8 @@
         private bool DebugMode { get; }
 
         private ILogger Logger { get; }
+
+        private IEnumerable<string> ExcludedPaths { get; }
 
         public async Task<IEnumerable<SourceImage>> ListPendingAsync(Bucket bucket, BucketMonitorContext dbContext)
         {
@@ -207,7 +200,6 @@
             var table = new ConsoleTable("Status", "Total Count");
             table.Options.EnableCount = false;
 
-
             table.AddRow(this.ToName(ImageStatus.Completed), (imageMap.GetValueOrDefault(ImageStatus.Completed)?.Count ?? 0).ToString());
             table.AddRow(this.ToName(ImageStatus.Pending), (imageMap.GetValueOrDefault(ImageStatus.Pending)?.Count ?? 0).ToString());
             table.AddRow(this.ToName(ImageStatus.Failed), (imageMap.GetValueOrDefault(ImageStatus.Failed)?.Count ?? 0).ToString());
@@ -311,12 +303,15 @@
         private SourceImage GetFromCacheEntry(
             ImageEntry entry)
         {
+            FileInfo file = null;
+            var status = this.TryConvertPath(entry.Key, out file) ? entry.Status : ImageStatus.Skipped;
+
             return new SourceImage(
                 entry.Key,
-                this.TryConvertPath(entry.Key, out var file) ? file : null,
+                file,
                 entry.LastModified,
                 entry.FileSize,
-                entry.Status);
+                status);
         }
 
         private SourceImage ProcessObject(
@@ -342,7 +337,8 @@
                     Key = obj.Key,
                     LastModified = obj.LastModified,
                     FileSize = obj.Size,
-                    Status = image.Status
+                    Status = image.Status == ImageStatus.Skipped ?
+                        ImageStatus.Pending : image.Status
                 });
 
                 return image;
@@ -405,12 +401,21 @@
 
         public bool TryConvertPath(string key, out FileInfo file)
         {
-            return TryConvertPath(key, this.DriveLetter, out file);
+            return TryConvertPath(
+                key,
+                this.DriveLetter,
+                this.ExcludedPaths,
+                out file);
         }
 
-        public static bool TryConvertPath(string key, char driveLetter, out FileInfo file)
+        public static bool TryConvertPath(string key, char driveLetter, IEnumerable<string> excluded, out FileInfo file)
         {
-            if (key.EndsWith("/") || Path.IsPathRooted(key))
+            if (excluded.Any(x => key.StartsWith($"{x}/")))
+            {
+                file = default(FileInfo);
+                return false;
+            }
+            else if (key.EndsWith("/") || Path.IsPathRooted(key))
             {
                 file = default(FileInfo);
                 return false;

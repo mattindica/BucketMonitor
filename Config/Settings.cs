@@ -5,6 +5,7 @@
     using BucketMonitor.Config;
 
     using System;
+    using System.Collections.Generic;
     using System.IO;
     using YamlDotNet.Serialization;
     using YamlDotNet.Serialization.NamingConventions;
@@ -25,6 +26,8 @@
 
         public string DatabaseConnectionString { get; set; }
 
+        public List<string> ExcludedPaths { get; set; }
+
         public bool DebugMode { get; set; }
 
         public AWSCredentials GetCredentials()
@@ -43,6 +46,11 @@
 
         public string Summarize()
         {
+            var newline = Environment.NewLine;
+            var excluded = newline + string.Join(
+                $",{newline}", this.ExcludedPaths?.ToArray() ??
+                    new string[] { });
+
             return
                 $"bucket_name = {this.BucketName}\n" +
                 $"max_downloads = {this.MaxDownloads}\n" +
@@ -50,7 +58,8 @@
                 $"polling_interval = {this.PollingInterval}\n" +
                 $"region_endpoint = {this.RegionEndpoint.SystemName}\n" +
                 $"debug_mode = {this.DebugMode}\n" +
-                $"amazon_credentials = [{(this.AmazonCredentials == null ? "INSTANCE_PROFILE" : "BASIC")}]\n";
+                $"amazon_credentials = [{(this.AmazonCredentials == null ? "INSTANCE_PROFILE" : "BASIC")}]\n" +
+                $"excluded_paths = [{excluded}]";
         }
 
         public static bool TryLoad(string path, out Settings settings)

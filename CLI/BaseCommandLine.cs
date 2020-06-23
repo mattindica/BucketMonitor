@@ -25,6 +25,11 @@
         {
             using (var provider = this.Parent.CreateProvider())
             {
+                provider.GetService<ILogger<Program>>()
+                    .LogInformation("Loaded Config {0}: {1}",
+                        Program.ConfigFile,
+                        Parent.Settings.Summarize());
+
                 return await this.ExecuteAsync(app, provider);
             }
         }
