@@ -17,7 +17,7 @@
     using System.Linq;
     using System.Threading;
     using System.Threading.Tasks;
-
+    using Amazon.Runtime.Internal;
     using Amazon.S3;
     using Amazon.S3.Model;
 
@@ -178,22 +178,40 @@
         public async Task Summarize(ServiceProvider provider)
         {
             var dbContext = provider.GetService<BucketMonitorContext>();
-            var table = new ConsoleTable("Status", "Total Count");
-            table.Options.EnableCount = false;
-
             var bucket = await this.GetBucketAsync(dbContext);
 
-            var images = (await this.ListImagesAsync(dbContext, bucket))
+            var images = await this.ListImagesAsync(dbContext, bucket);
+            this.Summarize(images, provider);
+        }
+
+        public async Task SummarizeCached(ServiceProvider provider)
+        {
+            var dbContext = provider.GetService<BucketMonitorContext>();
+            var bucket = await this.GetBucketAsync(dbContext);
+
+            var images = bucket.Images.Select(x => this.GetFromCacheEntry(x));
+            this.Summarize(images, provider);
+        }
+
+
+        private void Summarize(
+            IEnumerable<SourceImage> images,
+            ServiceProvider provider)
+        {
+            var imageMap = images
                 .OrderBy(x => x.Status)
                 .ThenBy(x => x.LastModified)
                 .GroupBy(x => x.Status)
                 .ToDictionary(x => x.Key, x => x.ToList());
 
+            var table = new ConsoleTable("Status", "Total Count");
+            table.Options.EnableCount = false;
 
-            table.AddRow(this.ToName(ImageStatus.Completed), (images.GetValueOrDefault(ImageStatus.Completed)?.Count ?? 0).ToString());
-            table.AddRow(this.ToName(ImageStatus.Pending), (images.GetValueOrDefault(ImageStatus.Pending)?.Count ?? 0).ToString());
-            table.AddRow(this.ToName(ImageStatus.Failed), (images.GetValueOrDefault(ImageStatus.Failed)?.Count ?? 0).ToString());
-            table.AddRow(this.ToName(ImageStatus.Skipped), (images.GetValueOrDefault(ImageStatus.Skipped)?.Count ?? 0).ToString());
+
+            table.AddRow(this.ToName(ImageStatus.Completed), (imageMap.GetValueOrDefault(ImageStatus.Completed)?.Count ?? 0).ToString());
+            table.AddRow(this.ToName(ImageStatus.Pending), (imageMap.GetValueOrDefault(ImageStatus.Pending)?.Count ?? 0).ToString());
+            table.AddRow(this.ToName(ImageStatus.Failed), (imageMap.GetValueOrDefault(ImageStatus.Failed)?.Count ?? 0).ToString());
+            table.AddRow(this.ToName(ImageStatus.Skipped), (imageMap.GetValueOrDefault(ImageStatus.Skipped)?.Count ?? 0).ToString());
 
             table.Write();
         }
@@ -240,22 +258,44 @@
             }
         }
 
-
-        public async Task DisplayImages(ServiceProvider provider)
+        public async Task DisplayImages(
+            ServiceProvider provider,
+            ImageStatus? filter = null)
         {
             var dbContext = provider.GetService<BucketMonitorContext>();
             var bucket = await this.GetBucketAsync(dbContext);
-            var table = new ConsoleTable("Key", "Last Modified", "Status", "Path");
-            table.Options.EnableCount = false;
 
-            var images = (await this.ListImagesAsync(
+            var images = await this.ListImagesAsync(
                 dbContext: dbContext,
-                bucket: bucket))
-                    .OrderBy(x => x.Status)
-                    .ThenBy(x => x.LastModified);
+                bucket: bucket);
 
+            this.DisplayImages(images
+                .Where(x => filter.HasValue ? x.Status == filter : true)
+                .OrderBy(x => x.Status)
+                .ThenBy(x => x.LastModified));
+        }
+
+
+        public async Task DisplayCachedImages(
+            ServiceProvider provider,
+            ImageStatus? filter = null)
+        {
+            var dbContext = provider.GetService<BucketMonitorContext>();
+            var bucket = await this.GetBucketAsync(dbContext);
+            var images = bucket.Images.Select(x => this.GetFromCacheEntry(x));
+
+            this.DisplayImages(images
+                .Where(x => filter.HasValue ? x.Status == filter : true)
+                .OrderBy(x => x.Status)
+                .ThenBy(x => x.LastModified));
+        }
+
+        private void DisplayImages(IEnumerable<SourceImage> images)
+        {
             this.Logger.LogInformation("Showing {0} objects...", images.Count());
 
+            var table = new ConsoleTable("Key", "Last Modified", "Status", "Path");
+            table.Options.EnableCount = false;
             foreach (var image in images)
             {
                 table.AddRow(
@@ -264,9 +304,19 @@
                     Enum.GetName(typeof(ImageStatus), image.Status),
                     image.File?.FullName ?? "-"); 
             }
-
             table.Write();
             Console.WriteLine();
+        }
+
+        private SourceImage GetFromCacheEntry(
+            ImageEntry entry)
+        {
+            return new SourceImage(
+                entry.Key,
+                this.TryConvertPath(entry.Key, out var file) ? file : null,
+                entry.LastModified,
+                entry.FileSize,
+                entry.Status);
         }
 
         private SourceImage ProcessObject(
@@ -277,12 +327,7 @@
         {
             if (entries.TryGetValue(obj.Key, out var entry))
             {
-                return new SourceImage(
-                    obj.Key,
-                    this.TryConvertPath(obj.Key, out var file) ? file : null,
-                    obj.LastModified,
-                    obj.Size,
-                    entry.Status);
+                return this.GetFromCacheEntry(entry);
             }
             else
             {

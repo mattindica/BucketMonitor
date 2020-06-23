@@ -15,9 +15,16 @@
             CommandLineApplication app,
             ServiceProvider provider)
         {
-            await this.BuildBucketManager(provider)
-                .Summarize(provider);
+            var manager = this.BuildBucketManager(provider);
 
+            if (this.CachedOnly)
+            {
+                await manager.SummarizeCached(provider);
+            }
+            else
+            {
+                await manager.Summarize(provider);
+            }
             return 0;
         }
     }

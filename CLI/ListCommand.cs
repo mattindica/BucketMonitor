@@ -17,7 +17,17 @@
 
         protected override async Task<int> ExecuteAsync(CommandLineApplication app, ServiceProvider provider)
         {
-            await this.BuildBucketManager(provider).DisplayImages(provider);
+            var manager = this.BuildBucketManager(provider);
+
+            if (this.CachedOnly)
+            {
+                await manager.DisplayCachedImages(provider, filter: this.Status);
+            }
+            else
+            {
+                await manager.DisplayImages(provider, filter: this.Status);
+            }
+
             return 0;
         }
     }
