@@ -3,8 +3,9 @@
     public enum ImageStatus : int
     {
         Pending = 0,
-        Completed = 1,
-        Skipped = 2,
-        Failed = 3
+        Processing = 1,
+        Completed = 2,
+        Skipped = 3,
+        Failed = 4
     }
 }

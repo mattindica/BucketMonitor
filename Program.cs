@@ -4,8 +4,9 @@
     using System.IO;
     using System.Reflection;
     using System.Runtime.CompilerServices;
+    using System.Security.Cryptography.X509Certificates;
     using System.Threading.Tasks;
-
+    using Microsoft.EntityFrameworkCore;
     using Microsoft.Extensions.DependencyInjection;
     using Microsoft.Extensions.Logging;
 
@@ -36,7 +37,7 @@
             }
         }
 
-        private static void ConfigureServices(ServiceCollection services)
+        private static void ConfigureServices(ServiceCollection services, Settings settings)
         {
             SetupOutputDirectory();
 
@@ -46,9 +47,16 @@
                 .WriteTo.File(Path.Combine(LoggingDirectory, $"{timestamp}.log"))
                 .CreateLogger();
 
+            services.AddDbContext<BucketMonitorContext>(builder =>
+            {
+                builder.UseMySql(settings.DatabaseConnectionString);
+            });
+
             services.AddLogging(builder =>
             {
-                builder.SetMinimumLevel(LogLevel.Information)
+                builder
+                    .AddFilter("Microsoft.EntityFrameworkCore.Database.Command", LogLevel.Warning)
+                    .SetMinimumLevel(LogLevel.Information)
                     .AddSerilog(logger: serilogLogger, dispose: true)
                     .AddConsole(cfg => cfg.LogToStandardErrorThreshold = LogLevel.Information);
             });
@@ -57,40 +65,46 @@
 
         public static async Task Main(string[] args)
         {
-            var services = new ServiceCollection();
-            ConfigureServices(services);
-
-            using (ServiceProvider serviceProvider = services.BuildServiceProvider())
+            if (args.Length < 1)
             {
-                if (args.Length < 1)
-                {
-                    Console.WriteLine("Usage: dotnet run -- [monitor|list|status|completed]");
-                    return;
-                }
+                Console.WriteLine("Usage: dotnet run -- [monitor|list|status|completed]");
+                return;
+            }
 
-                var logger = serviceProvider.GetService<ILogger<Program>>();
 
-                if (Settings.TryLoad(ConfigFile, out var settings, logger))
+            if (Settings.TryLoad(ConfigFile, out var settings))
+            {
+                var services = new ServiceCollection();
+                ConfigureServices(services, settings);
+
+
+                using (ServiceProvider provider = services.BuildServiceProvider())
                 {
+                    var logger = provider.GetService<ILogger<Program>>();
                     logger.LogInformation("Loaded Configuration {0}:\n{1}", new FileInfo(ConfigFile).FullName, settings.Summarize());
-                    // Customize AWS info here
 
                     BucketManager manager = new BucketManager(
                         logger: logger,
                         settings: settings);
 
-                    switch (args[0]) {
-                        case "completed":
-                            await manager.DisplayCompleted();
-                            break;
+                    // Customize AWS info here
+
+                    switch (args[0])
+                    {
                         case "list":
-                            await manager.DisplayImages();
+                            await manager.DisplayImages(provider);
                             break;
                         case "status":
-                            await manager.Summarize();
+                            await manager.Summarize(provider);
                             break;
                         case "monitor":
-                            await manager.MonitorAsync();
+                            await manager.MonitorAsync(provider);
+                            break;
+                        case "configure":
+                            await manager.ConfigureBucketAsync(provider);
+                            break;
+                        case "db":
+                            await manager.DisplayImages(provider);
                             break;
                         default:
                             Console.WriteLine("Invalid Command: {0}", args[0]);
@@ -98,8 +112,10 @@
                     }
                 }
             }
-
-
+            else
+            {
+                Console.WriteLine("Failed to load config: {0}", ConfigFile);
+            }
         }
     }
 }

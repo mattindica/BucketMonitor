@@ -1,5 +1,16 @@
 ﻿namespace BucketMonitor
 {
+
+    /*
+     * TODO:
+     * 
+     * - Ignore Directores (Or Include)
+     * - Show Cached
+     * - Erase Cache
+     * 
+     * 
+     */
+
     using System;
     using System.Collections.Generic;
     using System.IO;
@@ -7,28 +18,27 @@
     using System.Threading;
     using System.Threading.Tasks;
 
-    using Amazon.Runtime;
     using Amazon.S3;
     using Amazon.S3.Model;
 
     using ConsoleTables;
+    using Microsoft.EntityFrameworkCore;
+    using Microsoft.Extensions.DependencyInjection;
     using Microsoft.Extensions.Logging;
 
     public class BucketManager
     {
-        private static readonly string TAG_NAME_PROCESSED = "processed";
         public BucketManager(
             ILogger logger,
             Settings settings)
         {
             this.Client = new AmazonS3Client(
-                credentials: settings.GetCredentials(), 
+                credentials: settings.GetCredentials(),
                 region: settings.RegionEndpoint);
 
             this.BucketName = settings.BucketName;
             this.DriveLetter = settings.DriveLetter;
             this.PollingInterval = settings.PollingInterval;
-            this.Cache = new S3ObjectCache(logger, settings.DriveLetter);
             this.DebugMode = settings.DebugMode;
             this.Logger = logger;
         }
@@ -41,44 +51,31 @@
 
         private AmazonS3Client Client { get; }
 
-        private S3ObjectCache Cache { get; } 
+        // private S3ObjectCache Cache { get; } 
 
-        private bool DebugMode { get; } 
+        private bool DebugMode { get; }
 
         private ILogger Logger { get; }
 
-        public async Task<IEnumerable<SourceImage>> ListPendingAsync()
+        public async Task<IEnumerable<SourceImage>> ListPendingAsync(Bucket bucket, BucketMonitorContext dbContext)
         {
-            return (await this.ListImagesAsync())
+            return (await this.ListImagesAsync(dbContext, bucket))
                 .Where(x => x.Status == ImageStatus.Pending)
                 .OrderBy(obj => obj.LastModified);
         }
 
-        private SourceImage LoadSourceImage(string key, DateTime lastModified, long totalBytes)
+        private SourceImage CreateSourceImage(string key, DateTime lastModified, long totalBytes)
         {
             SourceImage image;
 
             if (this.TryConvertPath(key, out var file))
             {
-                /*var tags = await this.ListTagsAsync(key);
-                ImageStatus status;
-
-                if (tags.TryGetValue(TAG_NAME_PROCESSED, out var value) && value == true.ToString())
-                {
-                    status = ImageStatus.Completed;
-                }
-                else
-                {
-                    status = ImageStatus.Pending;
-                }*/
-
                 image = new SourceImage(
                     key: key,
                     file: file,
                     lastModified: lastModified,
                     totalBytes: totalBytes,
                     status: ImageStatus.Pending);
-
             }
             else
             {
@@ -90,11 +87,10 @@
                     status: ImageStatus.Skipped);
             }
 
-            this.Cache.Put(image);
             return image;
         }
 
-        public async Task MonitorAsync()
+        public async Task MonitorAsync(ServiceProvider provider)
         {
             DateTime? lastCheck = null;
 
@@ -106,6 +102,7 @@
                     var now = DateTime.Now;
                     if (!lastCheck.HasValue || DateTime.Now.Subtract(lastCheck.Value) > this.PollingInterval)
                     {
+                        var dbContext = provider.GetService<BucketMonitorContext>();
                         Console.WriteLine();
                         Console.WriteLine();
                         Console.Out.Flush();
@@ -113,17 +110,19 @@
                         Console.Out.Flush();
                         lastCheck = DateTime.Now;
 
-                        var pending = await this.ListPendingAsync();
+                        var bucket = await this.GetBucketAsync(dbContext);
+                        var pending = await this.ListPendingAsync(bucket, dbContext);
                         var count = pending.Count();
                         var tracker = new DownloadTracker(count, pending.Select(x => x.TotalBytes).Sum());
+                        var dbTracker = new DatabaseTracker(dbContext: dbContext);
 
+                        var entryMap = bucket.Images.ToDictionary(x => x.Key);
                         if (count > 0)
                         {
                             this.Logger.LogInformation("Downloading {0} Pending Images", pending.Count());
-                            var tasks = pending.Select(image => this.DownloadAsync(image, tracker));
+                            var tasks = pending.Select(image => this.DownloadAsync(image, entryMap[image.Key], tracker, dbTracker));
                             await Task.WhenAll(tasks);
                             this.Logger.LogInformation("Downloads Complete");
-                            await this.Cache.SaveAsync();
                         }
                         else
                         {
@@ -142,12 +141,15 @@
             }
         }
 
-        public async Task Summarize()
+        public async Task Summarize(ServiceProvider provider)
         {
+            var dbContext = provider.GetService<BucketMonitorContext>();
             var table = new ConsoleTable("Status", "Total Count");
             table.Options.EnableCount = false;
 
-            var images = (await this.ListImagesAsync())
+            var bucket = await this.GetBucketAsync(dbContext);
+
+            var images = (await this.ListImagesAsync(dbContext, bucket))
                 .OrderBy(x => x.Status)
                 .ThenBy(x => x.LastModified)
                 .GroupBy(x => x.Status)
@@ -162,57 +164,50 @@
             table.Write();
         }
 
+        private async Task<Bucket> GetBucketAsync(BucketMonitorContext context)
+        {
+            var bucket = await context.Bucket
+                .Include(x => x.Images)
+                .SingleOrDefaultAsync(x => x.Name == this.BucketName);
+
+            if (bucket != null)
+            {
+                return bucket;
+            }
+            else
+            {
+                throw new Exception(string.Format("Bucket Not Configured: {0}", this.BucketName));
+            }
+        }
+        
         private string ToName(ImageStatus status) => Enum.GetName(typeof(ImageStatus), status);
 
-        public async Task DisplayCompleted()
+        public async Task ConfigureBucketAsync(ServiceProvider provider)
         {
-            var table = new ConsoleTable("Key", "Last Modified", "Completed", "Status", "Path");
-            table.Options.EnableCount = false;
-
-            var images = (await this.ListImagesAsync())
-                .OrderBy(x => x.Status)
-                .ThenBy(x => x.LastModified);
-
-            var tasks = images.Select(x => this.IsProcessed(x.Key));
-            this.Logger.LogInformation("Looking up processing status for {0} files", images.Count());
-
-            /*foreach (var (image, task) in Enumerable.Zip(images, tasks))
+            using (var dbContext = provider.GetService<BucketMonitorContext>())
             {
-                var result = await task;
-                this.Logger.LogInformation("{0} - {1}", image.Key, result);
-            }*/
-
-            var statuses = await Task.WhenAll(tasks);
-
-            foreach (var (image, completed) in Enumerable.Zip(images, statuses))
-            {
-                if (completed)
+                dbContext.Add(new Bucket()
                 {
-                    this.Logger.LogInformation("Detected Processed Object: {0}", image.Key);
-                    image.MarkCompleted();
-                    this.Cache.Put(image);
-                }
-                table.AddRow(
-                    image.Key,
-                    image.LastModified,
-                    completed,
-                    Enum.GetName(typeof(ImageStatus), image.Status),
-                    image.File?.FullName ?? "-"); 
-            }
+                    Name = this.BucketName
+                });
 
-            table.Write();
-            Console.WriteLine();
-            await this.Cache.SaveAsync();
+                await dbContext.SaveChangesAsync();
+            }
         }
 
-        public async Task DisplayImages()
+
+        public async Task DisplayImages(ServiceProvider provider)
         {
+            var dbContext = provider.GetService<BucketMonitorContext>();
+            var bucket = await this.GetBucketAsync(dbContext);
             var table = new ConsoleTable("Key", "Last Modified", "Status", "Path");
             table.Options.EnableCount = false;
 
-            var images = (await this.ListImagesAsync())
-                .OrderBy(x => x.Status)
-                .ThenBy(x => x.LastModified);
+            var images = (await this.ListImagesAsync(
+                dbContext: dbContext,
+                bucket: bucket))
+                    .OrderBy(x => x.Status)
+                    .ThenBy(x => x.LastModified);
 
             this.Logger.LogInformation("Showing {0} objects...", images.Count());
 
@@ -229,20 +224,44 @@
             Console.WriteLine();
         }
 
-        private SourceImage LoadObject(S3Object obj)
+        private SourceImage ProcessObject(
+            Bucket bucket,
+            S3Object obj,
+            Dictionary<string, ImageEntry> entries)
         {
-            if (this.Cache.TryGet(obj.Key, obj.LastModified, out var cached))
+            if (entries.TryGetValue(obj.Key, out var entry))
             {
-                return cached;
+                return new SourceImage(
+                    obj.Key,
+                    this.TryConvertPath(obj.Key, out var file) ? file : null,
+                    obj.LastModified,
+                    obj.Size,
+                    entry.Status);
             }
             else
             {
-                return this.LoadSourceImage(obj.Key, obj.LastModified, obj.Size);
+                bucket.Images.Add(new ImageEntry()
+                {
+                    Bucket = bucket,
+                    Key = obj.Key,
+                    LastModified = obj.LastModified,
+                    FileSize = obj.Size,
+                    Status = ImageStatus.Pending
+                });
+
+                return this.CreateSourceImage(
+                    key: obj.Key,
+                    lastModified: obj.LastModified,
+                    totalBytes: obj.Size);
             }
         } 
 
-        private async Task<IEnumerable<SourceImage>> ListImagesAsync()
+        private async Task<IEnumerable<SourceImage>> ListImagesAsync(
+            BucketMonitorContext dbContext,
+            Bucket bucket)
         {
+            var entries = bucket.Images.ToDictionary(x => x.Key);
+
             var results = new List<SourceImage>();
             ListObjectsV2Request request = new ListObjectsV2Request
             {
@@ -258,7 +277,20 @@
                 console.Update($"Querying {results.Count()} Objects...");
                 response = await this.Client.ListObjectsV2Async(request);
 
-                var images = response.S3Objects.Select(obj => this.LoadObject(obj));
+                var images = new List<SourceImage>();
+
+                foreach (var obj in response.S3Objects)
+                {
+                    var image = this.ProcessObject(
+                        bucket: bucket,
+                        obj: obj,
+                        entries: entries);
+
+                    images.Add(image);
+                }
+
+                await dbContext.SaveChangesAsync();
+
                 results.AddRange(images);
                 request.ContinuationToken = response.NextContinuationToken;
                 count++;
@@ -270,58 +302,10 @@
             Console.WriteLine();
             this.Logger.LogInformation($"Queried {results.Count()} Objects");
 
-            await this.Cache.SaveAsync();
             Console.Out.Flush();
 
             return results;
         }
-
-        private async Task<bool> IsProcessed(string key)
-        {
-            try
-            {
-                var tags = await this.ListTagsAsync(key);
-                return tags.ContainsKey(TAG_NAME_PROCESSED);
-            }
-            catch (Exception ec)
-            {
-                this.Logger.LogError("Error checking processing status for {0}: {1}", key, ec);
-                return false;
-            }
-        }
-
-        private async Task<IDictionary<string, string>> ListTagsAsync(string key)
-        {
-            GetObjectTaggingRequest request = new GetObjectTaggingRequest
-            {
-                BucketName = this.BucketName,
-                Key = key
-            };
-            var response = await this.Client.GetObjectTaggingAsync(request);
-            return response.Tagging.ToDictionary(x => x.Key, x => x.Value);
-        }
-
-        /*public async Task UpdateImageStatusAsync(
-          string key,
-          bool processed)
-        {
-            await this.Client.PutObjectTaggingAsync(new PutObjectTaggingRequest
-            {
-                BucketName = this.BucketName,
-                Key = key, 
-                Tagging = new Tagging
-                {
-                    TagSet = new List<Tag>
-                    {
-                        new Tag()
-                        {
-                            Key = TAG_NAME_PROCESSED,
-                            Value = processed.ToString()
-                        }
-                    }
-                }
-            });
-        }*/
 
         public bool TryConvertPath(string key, out FileInfo file)
         {
@@ -345,7 +329,9 @@
 
         public async Task<FileInfo> DownloadAsync(
             SourceImage image,
-            DownloadTracker tracker)
+            ImageEntry entry,
+            DownloadTracker tracker,
+            DatabaseTracker dbTracker)
         {
             var file = image.File;
 
@@ -395,7 +381,7 @@
                     if (!this.SafeMove(tmp, file.FullName))
                     {
                         image.MarkFailed();
-                        this.Cache.Put(image);//, skipEnqueue: true);
+                        dbTracker.Update(entry, ImageStatus.Failed);
                         tracker.Fail();
                         return null;
                     }
@@ -406,7 +392,8 @@
                 this.Logger.LogDebug("Download Complete: {0} -> {1}", image.Key, file.FullName);
 
                 image.MarkCompleted();
-                this.Cache.Put(image);
+                dbTracker.Update(entry, ImageStatus.Completed);
+
                 if (started)
                 {
                     tracker.Complete();
@@ -420,7 +407,7 @@
                 this.Logger.LogDebug("Exception: {0}", ec.ToString());
 
                 image.MarkFailed();
-                this.Cache.Put(image);
+                dbTracker.Update(entry, ImageStatus.Failed);
 
                 if (started)
                 {

@@ -21,6 +21,8 @@
 
         public AmazonCredentials AmazonCredentials { get; set; }
 
+        public string DatabaseConnectionString { get; set; }
+
         public bool DebugMode { get; set; }
 
         public AWSCredentials GetCredentials()
@@ -48,7 +50,7 @@
                 $"amazon_credentials = [{(this.AmazonCredentials == null ? "INSTANCE_PROFILE" : "BASIC")}]\n";
         }
 
-        public static bool TryLoad(string path, out Settings settings, ILogger logger)
+        public static bool TryLoad(string path, out Settings settings)
         {
             try
             {
@@ -65,7 +67,6 @@
             }
             catch (Exception ec)
             {
-                logger.LogError("Error Loading Config File {0}: {1}", path, ec.ToString());
                 settings = null;
                 return false;
             }
