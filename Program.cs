@@ -88,7 +88,7 @@
             services.AddLogging(builder =>
             {
                 builder
-                    .AddFilter("Microsoft.EntityFrameworkCore.Database.Command", LogLevel.Warning)
+                    .AddFilter("Microsoft.EntityFrameworkCore", LogLevel.Warning)
                     .SetMinimumLevel(LogLevel.Information)
                     .AddSerilog(logger: serilogLogger, dispose: true)
                     .AddConsole(cfg => cfg.LogToStandardErrorThreshold = LogLevel.Information);

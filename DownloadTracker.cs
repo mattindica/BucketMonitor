@@ -1,9 +1,7 @@
 ﻿namespace BucketMonitor
 {
+    using Microsoft.EntityFrameworkCore.Storage.ValueConversion.Internal;
     using System;
-    using System.Collections.Generic;
-    using System.Text;
-    using System.Threading;
 
     public class DownloadTracker
     {
@@ -54,7 +52,17 @@
         {
             var all = (completed + failed);
             var remaining = total - (completed + failed);
-            this.message.Update($"Total={BytesToString(this.totalBytes)}, Downloaded={BytesToString(this.downloadedBytes)}, Processing={running}/{remaining}, SUCCESS={completed}, Failed={failed}");
+            var percent = all * 100 / total;
+            this.message.Update(
+                string.Format("PROCESSING IMAGES: {0}%: Data={1}/{2}, Remaining={3}/{4}, Success={5}, Failure={6}, Active={7}",
+                percent,
+                BytesToString(this.downloadedBytes),
+                BytesToString(this.totalBytes),
+                remaining,
+                total,
+                completed,
+                failed,
+                running));
         }
 
         public void Fail()

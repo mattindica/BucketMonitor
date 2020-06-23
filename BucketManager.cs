@@ -100,12 +100,10 @@
                         using (var scoped = provider.CreateScope())
                         {
                             var dbContext = scoped.ServiceProvider.GetService<BucketMonitorContext>();
-                            Console.WriteLine();
-                            Console.WriteLine();
-                            Console.Out.Flush();
-                            this.Logger.LogInformation("Scanning Bucket {0}", this.BucketName);
-                            Console.Out.Flush();
+                            this.Logger.LogDebug("Scanning Bucket {0}", this.BucketName);
                             lastCheck = DateTime.Now;
+
+                            Console.WriteLine("\n==> Scanning Bucket {0} ({1})", this.BucketName, DateTime.Now);
 
                             var bucket = await this.GetBucketAsync(dbContext);
                             var pending = await this.ListPendingAsync(bucket, dbContext);
@@ -117,7 +115,7 @@
                             var entryMap = bucket.Images.ToDictionary(x => x.Key);
                             if (count > 0)
                             {
-                                this.Logger.LogInformation("Downloading {0} Pending Images", pending.Count());
+                                this.Logger.LogDebug("Downloading {0} Pending Images", pending.Count());
                                 var throttler = new SemaphoreSlim(initialCount: this.MaxDownloads);
 
                                 var tasks = new List<Task<FileInfo>>();
@@ -142,11 +140,16 @@
                                         }));
                                 }
                                 await Task.WhenAll(tasks);
-                                this.Logger.LogInformation("Downloads Complete");
+
+                                Console.WriteLine();
+                                Console.WriteLine("Downloads Complete");
+                                this.Logger.LogDebug("Downloads Complete");
+
                             }
                             else
                             {
-                                this.Logger.LogInformation("No Pending Images");
+                                Console.WriteLine("No Pending Images");
+                                this.Logger.LogDebug("No Pending Images");
                             }
                         }
                     }
@@ -392,7 +395,7 @@
 
             console.Update("");
             Console.WriteLine();
-            this.Logger.LogInformation($"Queried {results.Count()} Objects");
+            this.Logger.LogDebug($"Queried {results.Count()} Objects");
 
             Console.Out.Flush();
 
