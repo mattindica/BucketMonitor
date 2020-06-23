@@ -1,7 +1,6 @@
 ﻿namespace BucketMonitor
 {
-    using System;
-    using System.Threading.Tasks;
+    using System.Linq;
 
     public class DatabaseTracker
     {
@@ -19,7 +18,8 @@
         {
             lock (myLock)
             {
-                entry.Status = status;
+                var image = this.DbContext.Image.Single(x => x.Id == entry.Id);
+                image.Status = status;
                 this.DbContext.SaveChanges();
             }
         }

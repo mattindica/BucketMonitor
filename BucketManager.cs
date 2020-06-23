@@ -164,11 +164,22 @@
             table.Write();
         }
 
-        private async Task<Bucket> GetBucketAsync(BucketMonitorContext context)
+        private async Task<Bucket> GetBucketAsync(BucketMonitorContext context, bool tracked = false)
         {
-            var bucket = await context.Bucket
-                .Include(x => x.Images)
-                .SingleOrDefaultAsync(x => x.Name == this.BucketName);
+            Bucket bucket;
+
+            if (tracked)
+            {
+                bucket = await context.Bucket
+                    .SingleOrDefaultAsync(x => x.Name == this.BucketName);
+            }
+            else
+            {
+                bucket = await context.Bucket
+                    .Include(x => x.Images)
+                    .AsNoTracking()
+                    .SingleOrDefaultAsync(x => x.Name == this.BucketName);
+            }
 
             if (bucket != null)
             {
@@ -225,7 +236,8 @@
         }
 
         private SourceImage ProcessObject(
-            Bucket bucket,
+            BucketMonitorContext dbContext,
+            Bucket tracked,
             S3Object obj,
             Dictionary<string, ImageEntry> entries)
         {
@@ -240,9 +252,9 @@
             }
             else
             {
-                bucket.Images.Add(new ImageEntry()
+                dbContext.Image.Add(new ImageEntry()
                 {
-                    Bucket = bucket,
+                    Bucket = tracked,
                     Key = obj.Key,
                     LastModified = obj.LastModified,
                     FileSize = obj.Size,
@@ -269,6 +281,8 @@
             };
 
             var console = new ConsoleString();
+            var tracked = await this.GetBucketAsync(dbContext, tracked: true);
+
 
             int count = 0;
             ListObjectsV2Response response;
@@ -282,7 +296,8 @@
                 foreach (var obj in response.S3Objects)
                 {
                     var image = this.ProcessObject(
-                        bucket: bucket,
+                        dbContext: dbContext,
+                        tracked: tracked,
                         obj: obj,
                         entries: entries);
 
@@ -403,7 +418,7 @@
             }
             catch (Exception ec)
             {
-                this.Logger.LogDebug("Download Failed:  {0} -> {1}", image.Key, file.FullName);
+                this.Logger.LogDebug("Download Failed:  {0} -> {1}", image.Key, file?.FullName ?? "-");
                 this.Logger.LogDebug("Exception: {0}", ec.ToString());
 
                 image.MarkFailed();
