@@ -260,7 +260,7 @@
 
         public async Task DisplayImages(
             ServiceProvider provider,
-            ImageStatus? filter = null)
+            ISet<ImageStatus> filter = null)
         {
             var dbContext = provider.GetService<BucketMonitorContext>();
             var bucket = await this.GetBucketAsync(dbContext);
@@ -270,7 +270,7 @@
                 bucket: bucket);
 
             this.DisplayImages(images
-                .Where(x => filter.HasValue ? x.Status == filter : true)
+                .Where(x => filter?.Contains(x.Status) != false)
                 .OrderBy(x => x.Status)
                 .ThenBy(x => x.LastModified));
         }
@@ -278,14 +278,14 @@
 
         public async Task DisplayCachedImages(
             ServiceProvider provider,
-            ImageStatus? filter = null)
+            ISet<ImageStatus> filter = null)
         {
             var dbContext = provider.GetService<BucketMonitorContext>();
             var bucket = await this.GetBucketAsync(dbContext);
             var images = bucket.Images.Select(x => this.GetFromCacheEntry(x));
 
             this.DisplayImages(images
-                .Where(x => filter.HasValue ? x.Status == filter : true)
+                .Where(x => filter?.Contains(x.Status) != false)
                 .OrderBy(x => x.Status)
                 .ThenBy(x => x.LastModified));
         }
