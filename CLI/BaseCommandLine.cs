@@ -5,6 +5,7 @@
     using Microsoft.Extensions.DependencyInjection;
     using McMaster.Extensions.CommandLineUtils;
     using Microsoft.Extensions.Logging;
+    using System;
 
     [HelpOption("-h|--help")]
     public abstract class BaseCommandLine<T>
@@ -25,10 +26,9 @@
         {
             using (var provider = this.Parent.CreateProvider())
             {
-                provider.GetService<ILogger<Program>>()
-                    .LogInformation("Loaded Config {0}: {1}",
-                        Program.ConfigFile,
-                        Parent.Settings.Summarize());
+                Console.WriteLine("Loaded Config {0}:", Program.ConfigFile);
+                Console.WriteLine();
+                Console.WriteLine(Parent.Settings.Summarize());
 
                 return await this.ExecuteAsync(app, provider);
             }

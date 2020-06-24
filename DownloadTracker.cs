@@ -51,18 +51,18 @@
         private void PrintStatus()
         {
             var all = (completed + failed);
-            var remaining = total - (completed + failed);
             var percent = all * 100 / total;
+
+            var failureText = failed > 0 ? $", Failures={failed}" : string.Empty;
             this.message.Update(
-                string.Format("PROCESSING IMAGES: {0}%: Data={1}/{2}, Remaining={3}/{4}, Success={5}, Failure={6}, Active={7}",
+                string.Format("Processing Objects {0}%: Remaining=({1}/{2}) Downloaded={3}/{4}, Active={5}{6}",
                 percent,
+                all,
+                total,
                 BytesToString(this.downloadedBytes),
                 BytesToString(this.totalBytes),
-                remaining,
-                total,
-                completed,
-                failed,
-                running));
+                running,
+                failureText));
         }
 
         public void Fail()

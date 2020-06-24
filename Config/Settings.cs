@@ -47,8 +47,8 @@
         public string Summarize()
         {
             var newline = Environment.NewLine;
-            var excluded = newline + string.Join(
-                $",{newline}", this.ExcludedPaths?.ToArray() ??
+            var excluded = string.Join(
+                $", ", this.ExcludedPaths?.ToArray() ??
                     new string[] { });
 
             return

@@ -101,7 +101,7 @@
                             this.Logger.LogDebug("Scanning Bucket {0}", this.BucketName);
                             lastCheck = DateTime.Now;
 
-                            Console.WriteLine("\n==> Scanning Bucket {0} ({1})", this.BucketName, DateTime.Now);
+                            Console.WriteLine("\n=> Scanning Bucket {0} ({1})", this.BucketName, DateTime.Now);
 
                             var pending = await this.ListPendingAsync(provider);
                             var count = pending.Count();
@@ -338,8 +338,9 @@
             };
 
             var console = new ConsoleString();
+            console.Update($"Loading Objects...");
 
-
+            int cacheAdditions = 0;
             int count = 0;
             ListObjectsV2Response response;
             do
@@ -351,7 +352,6 @@
 
                     var tracked = await this.GetTrackedBucket(dbContext);
 
-                    console.Update($"Querying {results.Count()} Objects...");
                     response = await this.Client.ListObjectsV2Async(request);
 
                     var images = new List<SourceImage>();
@@ -372,21 +372,28 @@
                     {
                         dbContext.Image.AddRange(toAdd);
                         await dbContext.SaveChangesAsync();
+                        cacheAdditions += toAdd.Count();
                     }
 
                     results.AddRange(images);
                     request.ContinuationToken = response.NextContinuationToken;
                     count++;
+
+                    if (cacheAdditions > 0)
+                    {
+                        console.Update($"Loading Objects: {results.Count()}, CacheAdditions={cacheAdditions}");
+                    }
+                    else
+                    {
+                        console.Update($"Loading Objects: {results.Count()}");
+                    }
+
                 }
 
             }
             while (response.IsTruncated);
-
-            console.Update("");
-            Console.WriteLine();
+            console.Update($"Loaded {results.Count()} Objects");
             this.Logger.LogDebug($"Queried {results.Count()} Objects");
-
-            Console.Out.Flush();
 
             return results;
         }
