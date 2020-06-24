@@ -7,10 +7,8 @@
     using System.Linq;
     using System.Threading;
     using System.Threading.Tasks;
-    using Amazon.Runtime.Internal;
     using Amazon.S3;
     using Amazon.S3.Model;
-
     using ConsoleTables;
     using Microsoft.EntityFrameworkCore;
     using Microsoft.Extensions.DependencyInjection;
@@ -51,9 +49,9 @@
 
         private IEnumerable<string> ExcludedPaths { get; }
 
-        public async Task<IEnumerable<SourceImage>> ListPendingAsync(Bucket bucket, BucketMonitorContext dbContext)
+        public async Task<IEnumerable<SourceImage>> ListPendingAsync(ServiceProvider provider)
         {
-            return (await this.ListImagesAsync(dbContext, bucket))
+            return (await this.ListImagesAsync(provider))
                 .Where(x => x.Status == ImageStatus.Pending)
                 .OrderBy(obj => obj.LastModified);
         }
@@ -105,14 +103,12 @@
 
                             Console.WriteLine("\n==> Scanning Bucket {0} ({1})", this.BucketName, DateTime.Now);
 
-                            var bucket = await this.GetBucketAsync(dbContext);
-                            var pending = await this.ListPendingAsync(bucket, dbContext);
+                            var pending = await this.ListPendingAsync(provider);
                             var count = pending.Count();
                             var tracker = new DownloadTracker(count, pending.Select(x => x.TotalBytes).Sum());
                             var dbTracker = new DatabaseTracker(dbContext: dbContext);
 
-                            bucket = await this.GetBucketAsync(dbContext);
-                            var entryMap = bucket.Images.ToDictionary(x => x.Key);
+                            var entryMap = await this.GetImageMapAsync(dbContext);
                             if (count > 0)
                             {
                                 this.Logger.LogDebug("Downloading {0} Pending Images", pending.Count());
@@ -173,19 +169,14 @@
 
         public async Task Summarize(ServiceProvider provider)
         {
-            var dbContext = provider.GetService<BucketMonitorContext>();
-            var bucket = await this.GetBucketAsync(dbContext);
-
-            var images = await this.ListImagesAsync(dbContext, bucket);
+            var images = await this.ListImagesAsync(provider);
             this.Summarize(images, provider);
         }
 
         public async Task SummarizeCached(ServiceProvider provider)
         {
             var dbContext = provider.GetService<BucketMonitorContext>();
-            var bucket = await this.GetBucketAsync(dbContext);
-
-            var images = bucket.Images.Select(x => this.GetFromCacheEntry(x));
+            var images = await this.GetCachedImagesAsync(dbContext);
             this.Summarize(images, provider);
         }
 
@@ -211,31 +202,23 @@
             table.Write();
         }
 
-        private async Task<Bucket> GetBucketAsync(BucketMonitorContext context, bool tracked = false)
+        private async Task<IEnumerable<SourceImage>> GetCachedImagesAsync(BucketMonitorContext context)
         {
-            Bucket bucket;
+            return (await context.Image
+                .AsNoTracking()
+                .ToListAsync())
+                .Select(x => this.GetFromCacheEntry(x));
+        }
 
-            if (tracked)
-            {
-                bucket = await context.Bucket
-                    .SingleOrDefaultAsync(x => x.Name == this.BucketName);
-            }
-            else
-            {
-                bucket = await context.Bucket
-                    .Include(x => x.Images)
-                    .AsNoTracking()
-                    .SingleOrDefaultAsync(x => x.Name == this.BucketName);
-            }
+        private async Task<IDictionary<string, ImageEntry>> GetImageMapAsync(BucketMonitorContext context)
+        {
+            return await context.Image.AsNoTracking().ToDictionaryAsync(key => key.Key);
+        }
 
-            if (bucket != null)
-            {
-                return bucket;
-            }
-            else
-            {
-                throw new Exception(string.Format("Bucket Not Configured: {0}", this.BucketName));
-            }
+        private async Task<Bucket> GetTrackedBucket(BucketMonitorContext context)
+        {
+            return await context.Bucket
+                .SingleOrDefaultAsync(x => x.Name == this.BucketName);
         }
         
         private string ToName(ImageStatus status) => Enum.GetName(typeof(ImageStatus), status);
@@ -257,12 +240,8 @@
             ServiceProvider provider,
             ISet<ImageStatus> filter = null)
         {
-            var dbContext = provider.GetService<BucketMonitorContext>();
-            var bucket = await this.GetBucketAsync(dbContext);
-
             var images = await this.ListImagesAsync(
-                dbContext: dbContext,
-                bucket: bucket);
+                provider: provider);
 
             this.DisplayImages(images
                 .Where(x => filter?.Contains(x.Status) != false)
@@ -276,8 +255,7 @@
             ISet<ImageStatus> filter = null)
         {
             var dbContext = provider.GetService<BucketMonitorContext>();
-            var bucket = await this.GetBucketAsync(dbContext);
-            var images = bucket.Images.Select(x => this.GetFromCacheEntry(x));
+            var images = await this.GetCachedImagesAsync(dbContext);
 
             this.DisplayImages(images
                 .Where(x => filter?.Contains(x.Status) != false)
@@ -318,10 +296,10 @@
         }
 
         private SourceImage ProcessObject(
-            BucketMonitorContext dbContext,
             Bucket tracked,
             S3Object obj,
-            Dictionary<string, ImageEntry> entries)
+            IDictionary<string, ImageEntry> entries,
+            IList<ImageEntry> toAdd)
         {
             if (entries.TryGetValue(obj.Key, out var entry))
             {
@@ -334,7 +312,7 @@
                     lastModified: obj.LastModified,
                     totalBytes: obj.Size);
 
-                dbContext.Image.Add(new ImageEntry()
+                toAdd.Add(new ImageEntry()
                 {
                     Bucket = tracked,
                     Key = obj.Key,
@@ -349,10 +327,9 @@
         } 
 
         private async Task<IEnumerable<SourceImage>> ListImagesAsync(
-            BucketMonitorContext dbContext,
-            Bucket bucket)
+            ServiceProvider provider)
         {
-            var entries = bucket.Images.ToDictionary(x => x.Key);
+            var entries = await this.GetImageMapAsync(provider.GetService<BucketMonitorContext>());
 
             var results = new List<SourceImage>();
             ListObjectsV2Request request = new ListObjectsV2Request
@@ -361,34 +338,46 @@
             };
 
             var console = new ConsoleString();
-            var tracked = await this.GetBucketAsync(dbContext, tracked: true);
 
 
             int count = 0;
             ListObjectsV2Response response;
             do
             {
-                console.Update($"Querying {results.Count()} Objects...");
-                response = await this.Client.ListObjectsV2Async(request);
-
-                var images = new List<SourceImage>();
-
-                foreach (var obj in response.S3Objects)
+                using (var scoped = provider.CreateScope())
                 {
-                    var image = this.ProcessObject(
-                        dbContext: dbContext,
-                        tracked: tracked,
-                        obj: obj,
-                        entries: entries);
+                    var dbContext = scoped.ServiceProvider.GetService<BucketMonitorContext>();
+                    dbContext.ChangeTracker.AutoDetectChangesEnabled = false;
 
-                    images.Add(image);
+                    var tracked = await this.GetTrackedBucket(dbContext);
+
+                    console.Update($"Querying {results.Count()} Objects...");
+                    response = await this.Client.ListObjectsV2Async(request);
+
+                    var images = new List<SourceImage>();
+                    var toAdd = new List<ImageEntry>();
+
+                    foreach (var obj in response.S3Objects)
+                    {
+                        var image = this.ProcessObject(
+                            tracked: tracked,
+                            obj: obj,
+                            entries: entries,
+                            toAdd: toAdd);
+
+                        images.Add(image);
+                    }
+
+                    if (toAdd.Count() > 0)
+                    {
+                        dbContext.Image.AddRange(toAdd);
+                        await dbContext.SaveChangesAsync();
+                    }
+
+                    results.AddRange(images);
+                    request.ContinuationToken = response.NextContinuationToken;
+                    count++;
                 }
-
-                await dbContext.SaveChangesAsync();
-
-                results.AddRange(images);
-                request.ContinuationToken = response.NextContinuationToken;
-                count++;
 
             }
             while (response.IsTruncated);
