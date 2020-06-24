@@ -29,6 +29,7 @@
                 Console.WriteLine("Loaded Config {0}:", Program.ConfigFile);
                 Console.WriteLine();
                 Console.WriteLine(Parent.Settings.Summarize());
+                Console.WriteLine();
 
                 return await this.ExecuteAsync(app, provider);
             }

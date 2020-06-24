@@ -199,6 +199,8 @@
             table.AddRow(this.ToName(ImageStatus.Failed), (imageMap.GetValueOrDefault(ImageStatus.Failed)?.Count ?? 0).ToString());
             table.AddRow(this.ToName(ImageStatus.Skipped), (imageMap.GetValueOrDefault(ImageStatus.Skipped)?.Count ?? 0).ToString());
 
+            Console.WriteLine();
+            Console.WriteLine();
             table.Write();
         }
 
