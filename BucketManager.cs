@@ -1,21 +1,25 @@
 ﻿namespace BucketMonitor
 {
-
     using System;
     using System.Collections.Generic;
     using System.IO;
     using System.Linq;
     using System.Threading;
     using System.Threading.Tasks;
-    using Amazon.S3;
-    using Amazon.S3.Model;
-    using ConsoleTables;
+
     using Microsoft.EntityFrameworkCore;
     using Microsoft.Extensions.DependencyInjection;
     using Microsoft.Extensions.Logging;
 
+    using Amazon.S3;
+    using Amazon.S3.Model;
+
+    using ConsoleTables;
+
     public class BucketManager
     {
+        public static int MAX_PATH_LENGTH { get; } = 185;
+
         public BucketManager(
             ILogger logger,
             Settings settings)
@@ -359,7 +363,10 @@
                     var images = new List<SourceImage>();
                     var toAdd = new List<ImageEntry>();
 
-                    foreach (var obj in response.S3Objects)
+                    var filtered = response.S3Objects
+                        .Where(x => x.Key.Length <= MAX_PATH_LENGTH);
+
+                    foreach (var obj in filtered)
                     {
                         var image = this.ProcessObject(
                             tracked: tracked,
@@ -520,6 +527,7 @@
                 if (sourceFile.Length == destinationFile.Length)
                 {
                     File.Move(source, destination, overwrite: true);
+                    return true;
                 }
                 else
                 {
@@ -530,9 +538,9 @@
                         destination);
 
                     File.Delete(source);
+                    return false;
                 }
 
-                return true;
             }
             catch (Exception ec)
             {
@@ -541,7 +549,6 @@
                 {
                     File.Delete(source);
                 }
-
                 return false;
             }
         }
