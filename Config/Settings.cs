@@ -30,6 +30,8 @@
 
         public bool DebugMode { get; set; }
 
+        public DateTime? DateCuttoff { get; set; }
+
         public AWSCredentials GetCredentials()
         {
             if (this.AmazonCredentials != null)
@@ -58,6 +60,7 @@
                 $"polling_interval = {this.PollingInterval}\n" +
                 $"region_endpoint = {this.RegionEndpoint.SystemName}\n" +
                 $"debug_mode = {this.DebugMode}\n" +
+                $"date_cutoff = {this.DateCuttoff.ToString() ?? "-"}\n" +
                 $"amazon_credentials = [{(this.AmazonCredentials == null ? "INSTANCE_PROFILE" : "BASIC")}]\n" +
                 $"excluded_paths = [{excluded}]";
         }

@@ -34,6 +34,7 @@
             this.DebugMode = settings.DebugMode;
             this.MaxDownloads = settings.MaxDownloads;
             this.ExcludedPaths = settings.ExcludedPaths ?? new List<string>();
+            this.DateCuttoff = settings.DateCuttoff;
             this.Logger = logger;
         }
 
@@ -46,6 +47,8 @@
         private AmazonS3Client Client { get; }
 
         private int MaxDownloads { get; set; }
+
+        private DateTime? DateCuttoff { get; set; }
 
         private bool DebugMode { get; }
 
@@ -365,6 +368,11 @@
 
                     var filtered = response.S3Objects
                         .Where(x => x.Key.Length <= MAX_PATH_LENGTH);
+
+                    if (this.DateCuttoff.HasValue)
+                    {
+                        filtered = filtered.Where(x => x.LastModified >= this.DateCuttoff);
+                    }
 
                     foreach (var obj in filtered)
                     {
