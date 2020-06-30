@@ -49,7 +49,7 @@
         public string Summarize()
         {
             var newline = Environment.NewLine;
-            var excluded = string.Join(
+            var included = string.Join(
                 $", ", this.IncludedPaths?.ToArray() ??
                     new string[] { });
 
@@ -62,7 +62,7 @@
                 $"debug_mode = {this.DebugMode}\n" +
                 $"date_cutoff = {this.DateCuttoff.ToString() ?? "-"}\n" +
                 $"amazon_credentials = [{(this.AmazonCredentials == null ? "INSTANCE_PROFILE" : "BASIC")}]\n" +
-                $"excluded_paths = [{excluded}]";
+                $"included_paths = [{included}]";
         }
 
         public static bool TryLoad(string path, out Settings settings)
