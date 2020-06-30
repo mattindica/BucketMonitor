@@ -33,7 +33,7 @@
             this.PollingInterval = settings.PollingInterval;
             this.DebugMode = settings.DebugMode;
             this.MaxDownloads = settings.MaxDownloads;
-            this.ExcludedPaths = settings.ExcludedPaths ?? new List<string>();
+            this.IncludedPaths = settings.IncludedPaths ?? new List<string>();
             this.DateCuttoff = settings.DateCuttoff;
             this.Logger = logger;
         }
@@ -54,7 +54,7 @@
 
         private ILogger Logger { get; }
 
-        private IEnumerable<string> ExcludedPaths { get; }
+        private IEnumerable<string> IncludedPaths { get; }
 
         public async Task<IEnumerable<SourceImage>> ListPendingAsync(ServiceProvider provider)
         {
@@ -420,13 +420,13 @@
             return TryConvertPath(
                 key,
                 this.DriveLetter,
-                this.ExcludedPaths,
+                this.IncludedPaths,
                 out file);
         }
 
-        public static bool TryConvertPath(string key, char driveLetter, IEnumerable<string> excluded, out FileInfo file)
+        public static bool TryConvertPath(string key, char driveLetter, IEnumerable<string> included, out FileInfo file)
         {
-            if (excluded.Any(x => key.StartsWith($"{x}/")))
+            if (!included.Any(x => key.StartsWith($"{x}/")))
             {
                 file = default(FileInfo);
                 return false;

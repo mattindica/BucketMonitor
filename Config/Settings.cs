@@ -26,7 +26,7 @@
 
         public string DatabaseConnectionString { get; set; }
 
-        public List<string> ExcludedPaths { get; set; }
+        public List<string> IncludedPaths { get; set; }
 
         public bool DebugMode { get; set; }
 
@@ -50,7 +50,7 @@
         {
             var newline = Environment.NewLine;
             var excluded = string.Join(
-                $", ", this.ExcludedPaths?.ToArray() ??
+                $", ", this.IncludedPaths?.ToArray() ??
                     new string[] { });
 
             return
