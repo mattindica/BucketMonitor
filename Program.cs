@@ -20,7 +20,8 @@
        typeof(StatusCommand),
        typeof(MonitorCommand),
        typeof(ConfigureCommand),
-       typeof(ResetCommand)
+       typeof(ResetCommand),
+       typeof(MigrateCommand)
         )]
     public class Program 
     {

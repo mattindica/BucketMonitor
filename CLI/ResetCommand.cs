@@ -13,9 +13,7 @@
             CommandLineApplication app,
             ServiceProvider provider)
         {
-            Console.WriteLine("Are you sure you want to delete all image statuses? (y/n)");
-
-            if (Console.ReadLine().Trim().ToLower() == "y")
+            if (this.GetUserConfirmation("Are you sure you want to delete all image statuses?"))
             {
                 await this.BuildBucketManager(provider)
                     .ResetAsync(provider);
@@ -26,7 +24,6 @@
             {
                 return 1;
             }
-
         }
     }
 }

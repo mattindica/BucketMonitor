@@ -1,6 +1,5 @@
 ﻿namespace BucketMonitor
 {
-    using Microsoft.EntityFrameworkCore.Storage.ValueConversion.Internal;
     using System;
 
     public class DownloadTracker
@@ -85,7 +84,7 @@
             }
         }
 
-        private static String BytesToString(long byteCount)
+        private static string BytesToString(long byteCount)
         {
             string[] suf = { "B", "KB", "MB", "GB", "TB", "PB", "EB" }; //Longs run out around EB
             if (byteCount == 0)
