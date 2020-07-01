@@ -368,6 +368,7 @@
             ListObjectsV2Response response;
             do
             {
+                long total = 0;
                 using (var scoped = provider.CreateScope())
                 {
                     var dbContext = scoped.ServiceProvider.GetService<BucketMonitorContext>();
@@ -379,6 +380,8 @@
 
                     var images = new List<SourceImage>();
                     var toAdd = new List<ImageEntry>();
+
+                    total += response.S3Objects.Count();
 
                     var filtered = response.S3Objects
                         .Where(x => x.Key.Length <= MAX_PATH_LENGTH)
@@ -408,11 +411,11 @@
 
                     if (cacheAdditions > 0)
                     {
-                        console.Update($"Loading Objects: {results.Count()}, CacheAdditions={cacheAdditions}");
+                        console.Update($"Loading Objects: {total}, CacheAdditions={cacheAdditions}");
                     }
                     else
                     {
-                        console.Update($"Loading Objects: {results.Count()}");
+                        console.Update($"Loading Objects: {total}");
                     }
 
                 }
@@ -470,46 +473,56 @@
 
             try
             {
-                var response = await this.Client.GetObjectAsync(new GetObjectRequest()
+                if (!file.Exists)
                 {
-                    BucketName = this.BucketName,
-                    Key = image.Key
-                });
-
-                var tmp = Path.GetTempFileName();
-
-                long transferred = 0;
-                response.WriteObjectProgressEvent += (sender, p) =>
-                {
-                    if (!started)
+                    var response = await this.Client.GetObjectAsync(new GetObjectRequest()
                     {
-                        tracker.Start();
+                        BucketName = this.BucketName,
+                        Key = image.Key
+                    });
+
+                    var tmp = Path.GetTempFileName();
+
+                    long transferred = 0;
+                    response.WriteObjectProgressEvent += (sender, p) =>
+                    {
+                        if (!started)
+                        {
+                            tracker.Start();
+                        }
+                        started = true;
+
+                        downloaded = p.TransferredBytes;
+                        tracker.Downloaded(downloaded - transferred);
+                        transferred = downloaded;
+                    };
+
+                    await response.WriteResponseStreamToFileAsync(tmp, false, CancellationToken.None);
+
+                    if (this.DebugMode)
+                    {
+                        File.Delete(tmp);
                     }
-                    started = true;
+                    else
+                    {
+                        if (!this.SafeMove(tmp, file.FullName))
+                        {
+                            image.MarkFailed();
+                            dbTracker.Update(entry, ImageStatus.Failed);
+                            tracker.Fail();
+                            return null;
+                        }
+                    }
 
-                    downloaded = p.TransferredBytes;
-                    tracker.Downloaded(downloaded - transferred);
-                    transferred = downloaded;
-                };
-
-                await response.WriteResponseStreamToFileAsync(tmp, false, CancellationToken.None);
-
-                if (this.DebugMode)
-                {
-                    File.Delete(tmp);
+                    this.Logger.LogDebug("Download Complete: {0} -> {1}", image.Key, file?.FullName ?? "-");
                 }
                 else
                 {
-                    if (!this.SafeMove(tmp, file.FullName))
-                    {
-                        image.MarkFailed();
-                        dbTracker.Update(entry, ImageStatus.Failed);
-                        tracker.Fail();
-                        return null;
-                    }
+                    this.Logger.LogDebug("Skipping Existing File: {0} -> {1}", image.Key, file?.FullName ?? "-");
+                    started = true;
+                    tracker.Start();
+                    tracker.Downloaded(image.TotalBytes);
                 }
-
-                this.Logger.LogDebug("Download Complete: {0} -> {1}", image.Key, file?.FullName ?? "-");
 
                 image.MarkCompleted();
                 dbTracker.Update(entry, ImageStatus.Completed);
@@ -552,7 +565,7 @@
                     this.Logger.LogDebug($"Created Directory: {destinationFile.Directory.FullName}");
                 }
 
-                File.Move(source, destination, overwrite: true);
+                File.Move(source, destination);
                 return true;
             }
             catch (Exception ec)
