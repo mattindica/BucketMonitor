@@ -15,6 +15,7 @@
     using Amazon.S3.Model;
 
     using ConsoleTables;
+    using System.Runtime.CompilerServices;
 
     public class BucketManager
     {
@@ -34,7 +35,6 @@
             this.DebugMode = settings.DebugMode;
             this.MaxDownloads = settings.MaxDownloads;
             this.IncludedPaths = settings.IncludedPaths ?? new List<string>();
-            this.DateCuttoff = settings.DateCuttoff;
             this.Logger = logger;
         }
 
@@ -47,8 +47,6 @@
         private AmazonS3Client Client { get; }
 
         private int MaxDownloads { get; set; }
-
-        private DateTime? DateCuttoff { get; set; }
 
         private bool DebugMode { get; }
 
@@ -367,12 +365,8 @@
                     var toAdd = new List<ImageEntry>();
 
                     var filtered = response.S3Objects
-                        .Where(x => x.Key.Length <= MAX_PATH_LENGTH);
-
-                    if (this.DateCuttoff.HasValue)
-                    {
-                        filtered = filtered.Where(x => x.LastModified >= this.DateCuttoff);
-                    }
+                        .Where(x => x.Key.Length <= MAX_PATH_LENGTH)
+                        .Where(x => this.IsIncludedPath(x.Key));
 
                     foreach (var obj in filtered)
                     {
@@ -424,9 +418,13 @@
                 out file);
         }
 
+        public bool IsIncludedPath(string key) => IsIncludedPath(key, this.IncludedPaths);
+
+        public static bool IsIncludedPath(string key, IEnumerable<string> included) => included.Any(x => key.StartsWith($"{x}/"));
+
         public static bool TryConvertPath(string key, char driveLetter, IEnumerable<string> included, out FileInfo file)
         {
-            if (!included.Any(x => key.StartsWith($"{x}/")))
+            if (!IsIncludedPath(key, included))
             {
                 file = default(FileInfo);
                 return false;
@@ -532,23 +530,14 @@
                 var sourceFile = new FileInfo(source); 
                 var destinationFile = new FileInfo(destination); 
 
-                if (sourceFile.Length == destinationFile.Length)
+                if (!destinationFile.Directory.Exists)
                 {
-                    File.Move(source, destination, overwrite: true);
-                    return true;
-                }
-                else
-                {
-                    this.Logger.LogDebug(
-                        "Cancelling Move Operation. Source file length ({0}) does not match destination ({1}): {2}",
-                        sourceFile.Length,
-                        destinationFile.Length,
-                        destination);
-
-                    File.Delete(source);
-                    return false;
+                    Directory.CreateDirectory(destinationFile.Directory.FullName);
+                    this.Logger.LogDebug($"Created Directory: {destinationFile.Directory.FullName}");
                 }
 
+                File.Move(source, destination, overwrite: true);
+                return true;
             }
             catch (Exception ec)
             {
