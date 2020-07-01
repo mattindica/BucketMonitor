@@ -1,6 +1,5 @@
 ﻿namespace BucketMonitor.CLI
 {
-    using System;
     using System.Threading.Tasks;
 
     using McMaster.Extensions.CommandLineUtils;
@@ -13,11 +12,10 @@
             CommandLineApplication app,
             ServiceProvider provider)
         {
+            var manager = await this.BuildBucketManager(provider);
             if (this.GetUserConfirmation("Are you sure you want to delete all image statuses?"))
             {
-                await this.BuildBucketManager(provider)
-                    .ResetAsync(provider);
-
+                await manager.ResetAsync(provider);
                 return 0;
             }
             else

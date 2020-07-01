@@ -169,7 +169,9 @@
         public async Task ResetAsync(ServiceProvider provider)
         {
             var dbContext = provider.GetService<BucketMonitorContext>();
-            await dbContext.Database.ExecuteSqlRawAsync("TRUNCATE TABLE IMAGE");
+            var toDelete = dbContext.Image.Where(x => x.Bucket.Name == this.BucketName);
+            dbContext.Image.RemoveRange(toDelete);
+            await dbContext.SaveChangesAsync();
         }
 
         public async Task Summarize(ServiceProvider provider)
@@ -215,6 +217,20 @@
                 .AsNoTracking()
                 .ToListAsync())
                 .Select(x => this.GetFromCacheEntry(x));
+        }
+        
+        public async Task ValidateBucket(BucketMonitorContext context)
+        {
+           var bucket = await context.Bucket
+                .AsNoTracking()
+                .Where(x => x.Name == this.BucketName)
+                .SingleOrDefaultAsync();
+
+            if (bucket == null)
+            {
+                this.Logger.LogError("Bucket is not configured: {0}", this.BucketName);
+                throw new Exception();
+            }
         }
 
         private async Task<IDictionary<string, ImageEntry>> GetImageMapAsync(BucketMonitorContext context)
@@ -420,7 +436,7 @@
 
         public bool IsIncludedPath(string key) => IsIncludedPath(key, this.IncludedPaths);
 
-        public static bool IsIncludedPath(string key, IEnumerable<string> included) => included.Any(x => key.StartsWith($"{x}/"));
+        public static bool IsIncludedPath(string key, IEnumerable<string> included) => included.Count() == 0 || included.Any(x => key.StartsWith($"{x}/"));
 
         public static bool TryConvertPath(string key, char driveLetter, IEnumerable<string> included, out FileInfo file)
         {

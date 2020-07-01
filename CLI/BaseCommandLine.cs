@@ -19,11 +19,18 @@
 
         protected abstract Task<int> ExecuteAsync(CommandLineApplication app, ServiceProvider provider);
 
-        protected BucketManager BuildBucketManager(ServiceProvider provider)
+        protected async Task<BucketManager> BuildBucketManager(ServiceProvider provider, bool validation = true)
         {
-            return new BucketManager(
+            var manager = new BucketManager(
                 logger: provider.GetService<ILogger<T>>(),
                 settings: this.Parent.Settings);
+
+            if (validation)
+            {
+                await manager.ValidateBucket(provider.GetService<BucketMonitorContext>());
+            }
+
+            return manager;
         }
 
         protected virtual async Task<int> OnExecuteAsync(CommandLineApplication app)

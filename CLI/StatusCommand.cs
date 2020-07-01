@@ -15,7 +15,7 @@
             CommandLineApplication app,
             ServiceProvider provider)
         {
-            var manager = this.BuildBucketManager(provider);
+            var manager = await this.BuildBucketManager(provider);
 
             if (this.CachedOnly)
             {

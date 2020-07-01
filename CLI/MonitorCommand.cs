@@ -12,8 +12,8 @@
             CommandLineApplication app,
             ServiceProvider provider)
         {
-            await this.BuildBucketManager(provider)
-                .MonitorAsync(provider);
+            var manager = await this.BuildBucketManager(provider);
+            await manager.MonitorAsync(provider);
             return 0;
         }
     }
