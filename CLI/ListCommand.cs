@@ -19,7 +19,7 @@
 
         protected override async Task<int> ExecuteAsync(CommandLineApplication app, ServiceProvider provider)
         {
-            var manager = this.BuildBucketManager(provider);
+            var manager = await this.BuildBucketManager(provider);
             var statuses = this.Statuses?.ToHashSet(); 
 
             if (this.CachedOnly)

@@ -29,19 +29,17 @@
                 region: settings.RegionEndpoint);
 
             this.BucketName = settings.BucketName;
-            this.DriveLetter = settings.DriveLetter;
             this.PollingInterval = settings.PollingInterval;
             this.DebugMode = settings.DebugMode;
             this.MaxDownloads = settings.MaxDownloads;
-            this.ExcludedPaths = settings.ExcludedPaths ?? new List<string>();
+            this.IncludedPaths = settings.IncludedPaths ?? new List<string>();
+            this.Settings = settings;
             this.Logger = logger;
         }
 
         public TimeSpan PollingInterval { get; }
 
         public string BucketName { get; }
-
-        public char DriveLetter { get; }
 
         private AmazonS3Client Client { get; }
 
@@ -51,7 +49,9 @@
 
         private ILogger Logger { get; }
 
-        private IEnumerable<string> ExcludedPaths { get; }
+        private IEnumerable<string> IncludedPaths { get; }
+
+        private Settings Settings { get; }
 
         public async Task<IEnumerable<SourceImage>> ListPendingAsync(ServiceProvider provider)
         {
@@ -168,7 +168,9 @@
         public async Task ResetAsync(ServiceProvider provider)
         {
             var dbContext = provider.GetService<BucketMonitorContext>();
-            await dbContext.Database.ExecuteSqlRawAsync("TRUNCATE TABLE IMAGE");
+            var toDelete = dbContext.Image.Where(x => x.Bucket.Name == this.BucketName);
+            dbContext.Image.RemoveRange(toDelete);
+            await dbContext.SaveChangesAsync();
         }
 
         public async Task Summarize(ServiceProvider provider)
@@ -214,6 +216,20 @@
                 .AsNoTracking()
                 .ToListAsync())
                 .Select(x => this.GetFromCacheEntry(x));
+        }
+        
+        public async Task ValidateBucket(BucketMonitorContext context)
+        {
+           var bucket = await context.Bucket
+                .AsNoTracking()
+                .Where(x => x.Name == this.BucketName)
+                .SingleOrDefaultAsync();
+
+            if (bucket == null)
+            {
+                this.Logger.LogError("Bucket is not configured: {0}", this.BucketName);
+                throw new Exception();
+            }
         }
 
         private async Task<IDictionary<string, ImageEntry>> GetImageMapAsync(BucketMonitorContext context)
@@ -349,6 +365,7 @@
             int cacheAdditions = 0;
             int count = 0;
             ListObjectsV2Response response;
+            long total = 0;
             do
             {
                 using (var scoped = provider.CreateScope())
@@ -363,8 +380,11 @@
                     var images = new List<SourceImage>();
                     var toAdd = new List<ImageEntry>();
 
+                    total += response.S3Objects.Count();
+
                     var filtered = response.S3Objects
-                        .Where(x => x.Key.Length <= MAX_PATH_LENGTH);
+                        .Where(x => x.Key.Length <= MAX_PATH_LENGTH)
+                        .Where(x => this.IsIncludedPath(x.Key));
 
                     foreach (var obj in filtered)
                     {
@@ -390,11 +410,11 @@
 
                     if (cacheAdditions > 0)
                     {
-                        console.Update($"Loading Objects: {results.Count()}, CacheAdditions={cacheAdditions}");
+                        console.Update($"Loading Objects: {total}, CacheAdditions={cacheAdditions}");
                     }
                     else
                     {
-                        console.Update($"Loading Objects: {results.Count()}");
+                        console.Update($"Loading Objects: {total}");
                     }
 
                 }
@@ -411,14 +431,18 @@
         {
             return TryConvertPath(
                 key,
-                this.DriveLetter,
-                this.ExcludedPaths,
+                this.Settings.RootPath,
+                this.IncludedPaths,
                 out file);
         }
 
-        public static bool TryConvertPath(string key, char driveLetter, IEnumerable<string> excluded, out FileInfo file)
+        public bool IsIncludedPath(string key) => IsIncludedPath(key, this.IncludedPaths);
+
+        public static bool IsIncludedPath(string key, IEnumerable<string> included) => included.Count() == 0 || included.Any(x => key.StartsWith($"{x}/"));
+
+        public static bool TryConvertPath(string key, string rootPath, IEnumerable<string> included, out FileInfo file)
         {
-            if (excluded.Any(x => key.StartsWith($"{x}/")))
+            if (!IsIncludedPath(key, included))
             {
                 file = default(FileInfo);
                 return false;
@@ -430,7 +454,7 @@
             }
             else
             {
-                var path = Path.Combine($"{driveLetter}:\\", key);
+                var path = Path.Combine(rootPath, key);
                 file = new FileInfo(path); 
                 return true;
             }
@@ -448,46 +472,56 @@
 
             try
             {
-                var response = await this.Client.GetObjectAsync(new GetObjectRequest()
+                if (!file.Exists)
                 {
-                    BucketName = this.BucketName,
-                    Key = image.Key
-                });
-
-                var tmp = Path.GetTempFileName();
-
-                long transferred = 0;
-                response.WriteObjectProgressEvent += (sender, p) =>
-                {
-                    if (!started)
+                    var response = await this.Client.GetObjectAsync(new GetObjectRequest()
                     {
-                        tracker.Start();
+                        BucketName = this.BucketName,
+                        Key = image.Key
+                    });
+
+                    var tmp = Path.GetTempFileName();
+
+                    long transferred = 0;
+                    response.WriteObjectProgressEvent += (sender, p) =>
+                    {
+                        if (!started)
+                        {
+                            tracker.Start();
+                        }
+                        started = true;
+
+                        downloaded = p.TransferredBytes;
+                        tracker.Downloaded(downloaded - transferred);
+                        transferred = downloaded;
+                    };
+
+                    await response.WriteResponseStreamToFileAsync(tmp, false, CancellationToken.None);
+
+                    if (this.DebugMode)
+                    {
+                        File.Delete(tmp);
                     }
-                    started = true;
+                    else
+                    {
+                        if (!this.SafeMove(tmp, file.FullName))
+                        {
+                            image.MarkFailed();
+                            dbTracker.Update(entry, ImageStatus.Failed);
+                            tracker.Fail();
+                            return null;
+                        }
+                    }
 
-                    downloaded = p.TransferredBytes;
-                    tracker.Downloaded(downloaded - transferred);
-                    transferred = downloaded;
-                };
-
-                await response.WriteResponseStreamToFileAsync(tmp, false, CancellationToken.None);
-
-                if (this.DebugMode)
-                {
-                    File.Delete(tmp);
+                    this.Logger.LogDebug("Download Complete: {0} -> {1}", image.Key, file?.FullName ?? "-");
                 }
                 else
                 {
-                    if (!this.SafeMove(tmp, file.FullName))
-                    {
-                        image.MarkFailed();
-                        dbTracker.Update(entry, ImageStatus.Failed);
-                        tracker.Fail();
-                        return null;
-                    }
+                    this.Logger.LogDebug("Skipping Existing File: {0} -> {1}", image.Key, file?.FullName ?? "-");
+                    started = true;
+                    tracker.Start();
+                    tracker.Downloaded(image.TotalBytes);
                 }
-
-                this.Logger.LogDebug("Download Complete: {0} -> {1}", image.Key, file?.FullName ?? "-");
 
                 image.MarkCompleted();
                 dbTracker.Update(entry, ImageStatus.Completed);
@@ -524,23 +558,14 @@
                 var sourceFile = new FileInfo(source); 
                 var destinationFile = new FileInfo(destination); 
 
-                if (sourceFile.Length == destinationFile.Length)
+                if (!destinationFile.Directory.Exists)
                 {
-                    File.Move(source, destination, overwrite: true);
-                    return true;
-                }
-                else
-                {
-                    this.Logger.LogDebug(
-                        "Cancelling Move Operation. Source file length ({0}) does not match destination ({1}): {2}",
-                        sourceFile.Length,
-                        destinationFile.Length,
-                        destination);
-
-                    File.Delete(source);
-                    return false;
+                    Directory.CreateDirectory(destinationFile.Directory.FullName);
+                    this.Logger.LogDebug($"Created Directory: {destinationFile.Directory.FullName}");
                 }
 
+                File.Move(source, destination);
+                return true;
             }
             catch (Exception ec)
             {

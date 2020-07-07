@@ -16,11 +16,13 @@
     [Command("BucketMonitor.exe")]
     [VersionOptionFromMember("--version", MemberName = nameof(GetVersion))]
     [Subcommand(
-       typeof(ListCommand),
-       typeof(StatusCommand),
        typeof(MonitorCommand),
        typeof(ConfigureCommand),
-       typeof(ResetCommand)
+       typeof(MigrateCommand),
+       typeof(SnapshotLocalCommand),
+       typeof(SnapshotRemoteCommand),
+       typeof(MissingCommand),
+       typeof(SyncCommand)
         )]
     public class Program 
     {
@@ -93,6 +95,12 @@
                     .AddSerilog(logger: serilogLogger, dispose: true)
                     .AddConsole(cfg => cfg.LogToStandardErrorThreshold = LogLevel.Information);
             });
+
+            services.AddSingleton(settings);
+            services.AddSingleton<AmazonScanner>();
+            services.AddSingleton<SyncManager>();
+            services.AddSingleton<AmazonMonitor>();
+            services.AddSingleton<DirectoryScanner>();
         }
 
         private void SetupOutputDirectory()
