@@ -18,10 +18,6 @@
             ServiceProvider provider)
         {
             var scanner = provider.GetService<DirectoryScanner>();
-            var root = this.Parent.Settings.RootPath;
-
-            Console.WriteLine("Scanning {0} ...", root); 
-
             var initial = DateTime.Now;
             var files = scanner.Scan().ToList();
 
