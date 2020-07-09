@@ -27,12 +27,14 @@
 
         public ILocalSnapshot Scan()
         {
-            return this.EnumerateIncludedFiles()
+            var files = this.EnumerateIncludedFiles()
                 .Aggregate(new LocalSnapshot(), (result, file) =>
                 {
                     result.Register(file);
                     return result;
                 });
+            Console.WriteLine();
+            return files;
         }
 
         private IEnumerable<FileInfo> EnumerateAllFiles()
@@ -43,7 +45,6 @@
         private IEnumerable<FileInfo> EnumerateIncludedFiles()
         {
             var counter = new DirectoryCounter($"Scanning {this.Settings.RootPath}");
-
             if (this.Settings.IncludedPaths.Count() > 0)
             {
                 return this.Settings.IncludedPaths.SelectMany(path =>
@@ -79,10 +80,10 @@
                 {
                     output.AddRange(this.EnumerateFiles(dir, counter));
                 }
-                catch
+                catch (Exception ec)
                 {
                     counter.AddFailedDirectory();
-                    //Console.WriteLine("Exception loading directory: {0}", dir.FullName);
+                    this.Logger.LogDebug($"Failed to scan directory '{dir.FullName}': {ec.ToString()}");
                 }
             }
             counter.AddScannedDirectory();
@@ -125,7 +126,7 @@
                 this.ConsoleString.Update(this.ToString());
             }
 
-            public override string ToString() => string.Format("{0} -> ScannedFiles={1:n0}. ScannedDirectories={2:n0}. FailedDirectories={3:n0}.",
+            public override string ToString() => string.Format("{0} - ScannedFiles={1:n0}. ScannedDirectories={2:n0}. FailedDirectories={3:n0}.",
                 this.Message,
                 this.ScannedFiles,
                 this.ScannedDirectories,
