@@ -4,8 +4,7 @@
     using System.Collections.Generic;
     using System.IO;
     using System.Linq;
-    using System.Runtime.CompilerServices;
-    using Amazon.S3.Model;
+    
     using Microsoft.Extensions.Logging;
 
     public class DirectoryScanner
@@ -71,22 +70,30 @@
             DirectoryCounter counter)
         {
             var output = new List<FileInfo>();
-            var files = directory.EnumerateFiles("*", SearchOption.TopDirectoryOnly);
-            output.AddRange(files);
-            counter.AddScannedFile(files.Count());
-            foreach (var dir in directory.EnumerateDirectories("*"))
+            try
             {
-                try
+                var files = directory.EnumerateFiles("*", SearchOption.TopDirectoryOnly);
+                output.AddRange(files);
+                counter.AddScannedFile(files.Count());
+                foreach (var dir in directory.EnumerateDirectories("*"))
                 {
-                    output.AddRange(this.EnumerateFiles(dir, counter));
+                    try
+                    {
+                        output.AddRange(this.EnumerateFiles(dir, counter));
+                    }
+                    catch (Exception ec)
+                    {
+                        counter.AddFailedDirectory();
+                        this.Logger.LogDebug($"Failed to scan directory '{dir.FullName}': {ec.ToString()}");
+                    }
                 }
-                catch (Exception ec)
-                {
-                    counter.AddFailedDirectory();
-                    this.Logger.LogDebug($"Failed to scan directory '{dir.FullName}': {ec.ToString()}");
-                }
+                counter.AddScannedDirectory();
             }
-            counter.AddScannedDirectory();
+            catch (Exception ec)
+            {
+                counter.AddFailedDirectory();
+                this.Logger.LogDebug($"Failed to scan directory '{directory.FullName}': {ec.ToString()}");
+            }
             return output;
         }
 
