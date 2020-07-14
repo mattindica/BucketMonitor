@@ -41,7 +41,7 @@
             return this.Root.EnumerateFiles("*", SearchOption.AllDirectories);
         }
 
-        private IEnumerable<FileInfo> EnumerateIncludedFiles()
+        private IList<FileInfo> EnumerateIncludedFiles()
         {
             var counter = new DirectoryCounter($"Scanning {this.Settings.RootPath}");
             if (this.Settings.IncludedPaths.Count() > 0)
@@ -51,21 +51,21 @@
                     var directory = new DirectoryInfo(Path.Combine(this.Settings.RootPath, path));
                     if (directory.Exists)
                     {
-                        return this.EnumerateFiles(directory, counter);
+                        return this.EnumerateFiles(directory, counter).ToList();
                     }
                     else
                     {
-                        return Enumerable.Empty<FileInfo>();
+                        return new List<FileInfo>();
                     }
-                });
+                }).ToList();
             }
             else
             {
-                return this.EnumerateFiles(this.Root, counter);
+                return this.EnumerateFiles(this.Root, counter).ToList();
             }
         }
 
-        private IEnumerable<FileInfo> EnumerateFiles(
+        private IList<FileInfo> EnumerateFiles(
             DirectoryInfo directory,
             DirectoryCounter counter)
         {
@@ -79,7 +79,7 @@
                 {
                     try
                     {
-                        output.AddRange(this.EnumerateFiles(dir, counter));
+                        output.AddRange(this.EnumerateFiles(dir, counter).ToList());
                     }
                     catch (Exception ec)
                     {
