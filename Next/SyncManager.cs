@@ -117,7 +117,7 @@
 
         public async Task<IEnumerable<RemoteImage>> DiffAsync()
         {
-            var snapshot = this.DirectoryScanner.Scan();
+            var snapshot = await this.DirectoryScanner.ScanAsync();
             return await this.Scanner.DiffAsync(snapshot, new ScanNotifier());
         }
 

@@ -4,7 +4,7 @@
     using System.Collections.Generic;
     using System.IO;
     using System.Linq;
-    
+    using System.Threading.Tasks;
     using Microsoft.Extensions.Logging;
 
     public class DirectoryScanner
@@ -24,15 +24,18 @@
 
         private DirectoryInfo Root { get; }
 
-        public ILocalSnapshot Scan()
+        public async Task<ILocalSnapshot> ScanAsync()
         {
-            var files = this.EnumerateIncludedFiles()
+            var counter = new DirectoryCounter($"Scanning {this.Settings.RootPath}");
+            var files = this.EnumerateIncludedFiles(counter)
                 .Aggregate(new LocalSnapshot(), (result, file) =>
                 {
                     result.Register(file);
                     return result;
                 });
             Console.WriteLine();
+
+            await counter.WriteErrorsToFileAsync();
             return files;
         }
 
@@ -41,9 +44,8 @@
             return this.Root.EnumerateFiles("*", SearchOption.AllDirectories);
         }
 
-        private IList<FileInfo> EnumerateIncludedFiles()
+        private IList<FileInfo> EnumerateIncludedFiles(DirectoryCounter counter)
         {
-            var counter = new DirectoryCounter($"Scanning {this.Settings.RootPath}");
             if (this.Settings.IncludedPaths.Count() > 0)
             {
                 return this.Settings.IncludedPaths.SelectMany(path =>
@@ -83,7 +85,7 @@
                     }
                     catch (Exception ec)
                     {
-                        counter.AddFailedDirectory();
+                        counter.AddFailedDirectory(dir.FullName);
                         this.Logger.LogDebug($"Failed to scan directory '{dir.FullName}': {ec.ToString()}");
                     }
                 }
@@ -91,7 +93,7 @@
             }
             catch (Exception ec)
             {
-                counter.AddFailedDirectory();
+                counter.AddFailedDirectory(directory.FullName);
                 this.Logger.LogDebug($"Failed to scan directory '{directory.FullName}': {ec.ToString()}");
             }
             return output;
@@ -113,6 +115,8 @@
 
             private ConsoleString ConsoleString { get; } = new ConsoleString();
 
+            private IList<string> Failed = new List<string>();
+
             private string Message { get; }
 
             public void AddScannedFile(int count = 1)
@@ -121,9 +125,10 @@
                 this.ConsoleString.Update(this.ToString());
             }
 
-            public void AddFailedDirectory(int count = 1)
+            public void AddFailedDirectory(string path)
             {
-                this.FailedDirectories += count;
+                this.FailedDirectories += 1;
+                this.Failed.Add(path);
                 this.ConsoleString.Update(this.ToString());
             }
 
@@ -131,6 +136,17 @@
             {
                 this.ScannedDirectories += count;
                 this.ConsoleString.Update(this.ToString());
+            }
+
+            public async Task WriteErrorsToFileAsync()
+            {
+                if (this.Failed.Count() > 0)
+                {
+                    var timestamp = DateTime.Now.ToString("yyyyMMddTHHmmss");
+                    var path = Path.Combine(Program.LoggingDirectory, $"{timestamp}.failed_files.log");
+                    await File.WriteAllLinesAsync(path, this.Failed);
+                    Console.WriteLine("{0} failed directories saved to {1}", this.Failed.Count(), path);
+                }
             }
 
             public override string ToString() => string.Format("{0} - ScannedFiles={1:n0}. ScannedDirectories={2:n0}. FailedDirectories={3:n0}.",

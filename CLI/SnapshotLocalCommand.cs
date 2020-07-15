@@ -19,7 +19,7 @@
         {
             var scanner = provider.GetService<DirectoryScanner>();
             var initial = DateTime.Now;
-            var files = scanner.Scan().ToList();
+            var files = (await scanner.ScanAsync()).ToList();
 
             if (this.ShowFiles)
             {
@@ -27,8 +27,6 @@
             }
 
             Console.WriteLine("Scanned {0:n0} Files: {1}", files.Count(), DateTime.Now.Subtract(initial));
-
-            await Task.Delay(0); //TODO: Remove this
             return 0;
         }
     }
