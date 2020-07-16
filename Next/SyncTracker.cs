@@ -98,7 +98,18 @@
         private void PrintStatus()
         {
             var all = (completed + failed);
-            var percent = this.transferredBytes * 100L / this.totalBytes;
+
+            long percent;
+
+            if (this.totalBytes > 0)
+            {
+                percent = this.transferredBytes * 100L / this.totalBytes;
+            }
+            else
+            {
+                percent = 100;
+            }
+
 
             var failureText = failed > 0 ? $", Failures={failed}" : string.Empty;
             this.message.Update(
